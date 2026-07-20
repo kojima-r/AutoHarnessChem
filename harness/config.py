@@ -69,6 +69,6 @@ def load_config(path: str | Path | None = None) -> HarnessConfig:
         data = _deep_merge(data, override)
     config = HarnessConfig.model_validate(data)
     if config.mode == "production":
-        # 本番では自己改善を強制無効化する（specification.md 段階5）
+        # 本番では自己改善を強制無効化する
         config.self_improvement = False
     return config

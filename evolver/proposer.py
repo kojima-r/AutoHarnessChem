@@ -1,7 +1,7 @@
 """改善候補生成。
 
 trace 解析から Skill (SKILL.md) への追記案を生成し、unified diff として
-evolver/proposals/<id>/ に出力する。自動適用はしない（specification.md §10-8）。
+evolver/proposals/<id>/ に出力する。自動適用はしない（人手レビュー前提）。
 
 2段階で提案する:
   1. リカバリベース（優先）: 失敗→成功が観測されたツールについて、実際にどの引数を

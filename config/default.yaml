@@ -1,4 +1,4 @@
-# AutoHarnessChem 既定設定（specification.md §2 / §8 / §10）
+# AutoHarnessChem 既定設定
 runtime:
   provider: deepagents        # deepagents | claude | openai
   model: default              # default = 各SDKの既定モデル

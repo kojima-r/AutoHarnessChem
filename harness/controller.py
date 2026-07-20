@@ -1,4 +1,4 @@
-"""Common Harness Core — 自律実行ループ（specification.md §7）。
+"""Common Harness Core — 自律実行ループ。
 
 1. ユーザ要求を TaskSpec へ変換
 2. 達成条件を設定

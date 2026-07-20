@@ -1,7 +1,7 @@
 """Scientific Verifier。
 
 終了条件は特定の文字列ではなく、この構造化判定（VerificationResult）で決める。
-Evolver による変更は禁止対象（specification.md 段階5）。
+Evolver による変更は禁止対象（評価基準を自己改善で甘くさせないため）。
 """
 from __future__ import annotations
 

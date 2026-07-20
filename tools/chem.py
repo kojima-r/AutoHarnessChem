@@ -1,4 +1,4 @@
-"""共通ツール実装（specification.md §6 の10ツール）。
+"""共通ツール実装。
 
 すべて ToolResult を返す。重い依存 (rdkit / pyscf / sklearn) は遅延 import し、
 無ければ status="failed", error_type="missing_dependency" を返す。

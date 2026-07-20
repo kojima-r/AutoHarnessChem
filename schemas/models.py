@@ -1,6 +1,6 @@
 """共通スキーマ。
 
-specification.md の TaskSpec / ToolResult / VerificationResult / AgentEvent を定義する。
+TaskSpec / ToolResult / VerificationResult / AgentEvent を定義する。
 SDK固有のメッセージはすべて AgentEvent へ正規化される。
 """
 from __future__ import annotations

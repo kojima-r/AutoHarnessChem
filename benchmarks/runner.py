@@ -100,7 +100,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         stats["success_rate"] = round(stats["passed"] / stats["n"], 3) if stats["n"] else None
         stats["mean_elapsed_sec"] = round(stats["elapsed"] / stats["n"], 2) if stats["n"] else None
 
-    # task_type ごとの最良プロバイダ → routing 更新案（実測ベース、specification.md §8）
+    # task_type ごとの最良プロバイダ → routing 更新案（実測ベース）
     by_type: dict[str, dict[str, list[bool]]] = {}
     for record in records:
         if record.get("skipped"):

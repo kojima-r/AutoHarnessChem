@@ -1,4 +1,4 @@
-# Benchmark定義（specification.md §10: 10〜20件）
+# Benchmark定義（SDK横断比較用のタスク集合。10〜20件を想定）
 # 正解・期待出力は Evolver の変更禁止対象。
 tasks:
   - id: bench-001

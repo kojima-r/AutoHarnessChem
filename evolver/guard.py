@@ -1,4 +1,4 @@
-"""Evolver の変更可否ガード（specification.md 段階5）。
+"""Evolver の変更可否ガード。
 
 変更許可: Skill 本文・付属スクリプト・instructions・tool description・retry policy 等。
 変更禁止: Benchmark 正解、Scientific Verifier、Security policy、評価指標、Evolver 自身。

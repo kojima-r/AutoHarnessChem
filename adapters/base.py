@@ -1,4 +1,4 @@
-"""AgentRuntimeAdapter — 共通Runtimeインターフェース（specification.md §3）。
+"""AgentRuntimeAdapter — 共通Runtimeインターフェース。
 
 SDK固有のイベントは各Adapterが TraceWriter 経由で AgentEvent に正規化する。
 SDKが未インストールの場合は AdapterUnavailable を送出し、Controller が
