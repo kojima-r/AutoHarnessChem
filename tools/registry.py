@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from schemas import SandboxConfig, ToolResult
-from tools import chem
+from tools import chem, reactiont5
 from tools.sandbox import create_sandbox
 
 
@@ -148,6 +148,29 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
         parameters=_schema({"code": {"type": "string", "description": "self-contained Python script"}},
                            ["code"]),
         func=lambda code: chem.run_python_sandbox(workspace, code, sandbox=sandbox, policy=policy),
+        risk_level="medium",
+    ))
+    # ReactionT5 は torch/transformers 依存のため、pyscf とは別の専用環境で実行する
+    t5_sandbox = create_sandbox(sandbox_config, workspace, env="reactiont5")
+    registry.register(ToolSpec(
+        name="predict_reaction_t5",
+        description=(
+            "ReactionT5v2 学習済みモデルで反応を予測する。task: 'yield'=収率回帰 (0-100%), "
+            "'forward'=生成物予測, 'retrosynthesis'=逆合成（前駆体予測）。"
+            "入力形式 — yield: 'REACTANT:...REAGENT:...PRODUCT:...', "
+            "forward: 'REACTANT:...REAGENT:...', retrosynthesis: 生成物SMILESのみ。"
+            "結果は reactiont5_predictions.csv に保存される。専用conda環境(reactiont5)で実行。"
+        ),
+        parameters=_schema({
+            "reactions": {"type": "array", "items": {"type": "string"},
+                          "description": "モデル入力文字列のリスト（形式は task に依存）"},
+            "task": {"type": "string", "enum": ["yield", "forward", "retrosynthesis"],
+                     "default": "forward"},
+            "num_beams": {"type": "integer", "default": 1,
+                          "description": "forward/retrosynthesis のビーム幅（候補数）"},
+            "output_csv": {"type": "string", "default": "reactiont5_predictions.csv"},
+        }, ["reactions", "task"]),
+        func=lambda **kw: reactiont5.predict_reaction_t5(workspace, sandbox=t5_sandbox, **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(

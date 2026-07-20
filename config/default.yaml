@@ -13,6 +13,11 @@ runtime:
     cpu_limit_sec: 300
     memory_limit_mb: 4096
     network: none
+    # ツール専用環境（predict_reaction_t5 は torch/transformers を持つ別環境で実行）
+    named_envs:
+      reactiont5:
+        conda_env: reactiont5
+        image: autoharnesschem/reactiont5:latest
 
 # task_type → provider。ベンチマーク実測から更新する（固定的な想定ではない）
 routing:

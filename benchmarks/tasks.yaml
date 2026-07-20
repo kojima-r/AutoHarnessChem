@@ -71,6 +71,18 @@ tasks:
     task_type: orbital_calculation
     expected_outputs: [orbital_features.csv]
 
+  - id: bench-013
+    tags: [reaction]
+    request: "REACTANT:COC(=O)C1=CCCN(C)C1.O.[Al+3].[H-].[Li+].[Na+].[OH-]REAGENT:C1CCOC1 の生成物を ReactionT5 で予測してください。"
+    task_type: reaction_prediction
+    expected_outputs: [reactiont5_predictions.csv]
+
+  - id: bench-014
+    tags: [reaction, retro]
+    request: "CCN(CC)CCNC(=S)NC1CCCc2cc(C)cnc21 の逆合成（前駆体）を ReactionT5 で予測し、候補を3つ挙げてください。"
+    task_type: reaction_prediction
+    expected_outputs: [reactiont5_predictions.csv]
+
   - id: bench-012
     tags: [reporting]
     request: "エタノール (CCO) の分子量・LogP・TPSA を計算し、結果を日本語の短い報告として Markdown (report_user.md) と HTML (report_user.html) の両形式で保存してください。"

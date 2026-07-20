@@ -34,7 +34,8 @@ pip install -e ".[deepagents]"          # Deep Agents (LangGraph)
 
 # sandbox イメージ（docker を使う場合）
 docker build -t autoharnesschem/sandbox:latest docker/
-# docker が無い環境では conda env `pyscf` を使う local sandbox に自動フォールバック
+docker build -t autoharnesschem/reactiont5:latest -f docker/Dockerfile.reactiont5 docker/
+# docker が無い環境では conda env を使う local sandbox に自動フォールバック
 ```
 
 API キーは各SDKの流儀に従い環境変数で渡す（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`、Web検索を使う場合は `TAVILY_API_KEY`）。
@@ -100,6 +101,20 @@ ahc api --port 8000        # → http://127.0.0.1:8000/ をブラウザで開く
 7. 合格なら `workspaces/<run_id>/report.{json,md}` と manifest を保存
 
 終了条件は文字列マッチではなく `VerificationResult` による構造化判定。全SDKのイベントは `AgentEvent` に正規化され `traces/<run_id>.jsonl` へ記録される。
+
+## ツール実行環境の分離
+
+依存が競合するツールは `sandbox.named_envs` でツール専用環境に分離できる。
+`predict_reaction_t5`（ReactionT5v2 による収率/生成物/逆合成予測）は torch/transformers を
+必要とするため、既定の `pyscf` 環境とは別の環境で実行される:
+
+| 実行系 | 既定ツール群 | predict_reaction_t5 |
+|---|---|---|
+| local sandbox | conda env `pyscf` | conda env `reactiont5` |
+| docker sandbox | `autoharnesschem/sandbox` | `autoharnesschem/reactiont5`（モデル焼き込み済み） |
+
+harness 本体のプロセスに torch は不要 — ツールは自己完結スクリプトを生成して
+専用環境の subprocess として実行し、結果を JSON/CSV で受け取る。
 
 ## Skill
 

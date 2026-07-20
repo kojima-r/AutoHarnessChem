@@ -23,6 +23,7 @@ def new_id(prefix: str) -> str:
 TaskType = Literal[
     "orbital_calculation",
     "molecular_regression",
+    "reaction_prediction",
     "dataset_analysis",
     "code_editing",
     "long_running_research",
@@ -93,6 +94,12 @@ class SandboxConfig(BaseModel):
     cpu_limit_sec: int = 300
     memory_limit_mb: int = 4096
     network: Literal["none", "bridge"] = "none"
+    # ツール専用の実行環境。依存が競合するツール（例: ReactionT5 の torch/transformers）を
+    # 既定環境 (pyscf) から分離する。local は conda_env、docker は image で解決される
+    named_envs: dict[str, dict[str, str]] = Field(default_factory=lambda: {
+        "reactiont5": {"conda_env": "reactiont5",
+                       "image": "autoharnesschem/reactiont5:latest"},
+    })
 
 
 class RuntimeConfig(BaseModel):

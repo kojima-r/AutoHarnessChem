@@ -38,6 +38,8 @@ class ScientificVerifier:
             warnings += self._check_orbitals(workspace, repairs)
         elif task.task_type == "molecular_regression":
             warnings += self._check_regression(workspace, repairs)
+        elif task.task_type == "reaction_prediction":
+            warnings += self._check_reaction_prediction(workspace, repairs)
 
         passed = not missing and not repairs
         return VerificationResult(
@@ -98,6 +100,30 @@ class ScientificVerifier:
                 warnings.append(f"{f.name}: r2={r2} — リーク（target が特徴量に混入）を疑ってください。")
             elif r2 < -1.0:
                 warnings.append(f"{f.name}: r2={r2} — モデルが機能していません。特徴量を確認してください。")
+        return warnings
+
+
+    def _check_reaction_prediction(self, workspace: Path, repairs: list[str]) -> list[str]:
+        warnings: list[str] = []
+        for f in workspace.rglob("reactiont5_predictions.csv"):
+            try:
+                rows = list(csv.DictReader(f.open(encoding="utf-8")))
+            except Exception as e:
+                repairs.append(f"{f.name} が読み込めません: {e}")
+                continue
+            if not rows:
+                repairs.append(f"{f.name} が空です。")
+                continue
+            for i, row in enumerate(rows):
+                if "predicted_yield" in row and row["predicted_yield"] not in ("", None):
+                    value = _safe_float(row["predicted_yield"])
+                    if value is None or not (0.0 <= value <= 100.0):
+                        warnings.append(
+                            f"{f.name} row {i}: predicted_yield={row['predicted_yield']} が "
+                            "0–100% の範囲外です。入力形式（REACTANT:/REAGENT:/PRODUCT:）を確認してください。"
+                        )
+                if "prediction" in row and not (row.get("prediction") or "").strip():
+                    warnings.append(f"{f.name} row {i}: prediction が空です。")
         return warnings
 
 

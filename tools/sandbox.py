@@ -31,9 +31,9 @@ class BaseSandbox:
         self.workspace = Path(workspace)
         self.workspace.mkdir(parents=True, exist_ok=True)
 
-    def run(self, code: str) -> SandboxResult:
+    def run(self, code: str, script_name: str = SCRIPT_FILENAME) -> SandboxResult:
         before = self._snapshot()
-        script_path = self.workspace / SCRIPT_FILENAME
+        script_path = self.workspace / script_name
         script_path.write_text(code, encoding="utf-8")
         result = self._execute(script_path)
         result.new_files = sorted(self._snapshot() - before - {str(script_path)})
@@ -111,7 +111,16 @@ class DockerSandbox(BaseSandbox):
             )
 
 
-def create_sandbox(config: SandboxConfig, workspace: Path) -> BaseSandbox:
+def create_sandbox(config: SandboxConfig, workspace: Path,
+                   env: str | None = None) -> BaseSandbox:
+    """env を指定すると named_envs の設定（conda_env / image）で上書きした
+    専用サンドボックスを作る（例: env="reactiont5" → conda env reactiont5 で実行）。"""
+    if env is not None:
+        override = config.named_envs.get(env, {})
+        config = config.model_copy(update={
+            "conda_env": override.get("conda_env", env),
+            "image": override.get("image", config.image),
+        })
     if config.type == "docker":
         if shutil.which("docker"):
             return DockerSandbox(config, workspace)

@@ -28,7 +28,10 @@ from tools import build_default_registry
 
 # タスク種別の判定ルール（Task Interpreter）
 _TASK_TYPE_RULES: list[tuple[str, str]] = [
-    (r"回帰|予測|regression|cross.?valid|交差検証|機械学習", "molecular_regression"),
+    # 明示的なMLワークフロー（回帰・交差検証）は reaction 系キーワードより優先する
+    (r"回帰|regression|cross.?valid|交差検証|機械学習", "molecular_regression"),
+    (r"収率|逆合成|レトロ合成|retrosynthesis|生成物.{0,4}予測|反応予測|reactiont5", "reaction_prediction"),
+    (r"予測モデル|target.{0,8}予測", "molecular_regression"),
     (r"homo|lumo|軌道|orbital|励起|吸収スペクトル|エネルギー計算|scf|dft", "orbital_calculation"),
     (r"データセット|dataset|データ.{0,4}(確認|調査|inspect)|欠損|統計量", "dataset_analysis"),
     (r"リファクタ|refactor|コード修正|bug|バグ", "code_editing"),
@@ -38,6 +41,7 @@ _TASK_TYPE_RULES: list[tuple[str, str]] = [
 _DEFAULT_EXPECTED_OUTPUTS = {
     "orbital_calculation": ["orbital_features.csv"],
     "molecular_regression": ["cv_metrics.json", "true_vs_pred.png"],
+    "reaction_prediction": ["reactiont5_predictions.csv"],
     "dataset_analysis": [],
     "generic": [],
 }

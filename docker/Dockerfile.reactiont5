@@ -1,0 +1,24 @@
+# ReactionT5 用 sandbox image（torch/transformers を pyscf 環境から分離）
+# build: docker build -t autoharnesschem/reactiont5:latest -f docker/Dockerfile.reactiont5 docker/
+#
+# 注意: sandbox は network=none で実行されるため、モデルは build 時に
+# イメージへ焼き込む（実行時の HuggingFace ダウンロードは不可）。
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir transformers sentencepiece
+
+# 学習済みモデルを事前取得（~1GB×3。不要な task があれば削って良い）
+RUN python - <<'EOF'
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
+for name in ("sagawa/ReactionT5v2-yield",
+             "sagawa/ReactionT5v2-forward",
+             "sagawa/ReactionT5v2-retrosynthesis"):
+    AutoTokenizer.from_pretrained(name)
+    AutoConfig.from_pretrained(name)
+for name in ("sagawa/ReactionT5v2-forward", "sagawa/ReactionT5v2-retrosynthesis"):
+    AutoModelForSeq2SeqLM.from_pretrained(name)
+EOF
+
+WORKDIR /workspace
+CMD ["python", "--version"]
