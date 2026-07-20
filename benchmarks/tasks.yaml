@@ -1,0 +1,78 @@
+# Benchmark定義（specification.md §10: 10〜20件）
+# 正解・期待出力は Evolver の変更禁止対象。
+tasks:
+  - id: bench-001
+    tags: [orbital, smoke]
+    request: "水分子 (SMILES: O) の HOMO/LUMO を HF/STO-3G で計算して orbital_features.csv に保存してください。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-002
+    tags: [orbital]
+    request: "ベンゼン (c1ccccc1) の HOMO/LUMO と gap を計算してください。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-003
+    tags: [orbital]
+    request: "メタノール (CO) とエタノール (CCO) の HOMO/LUMO を比較し、orbital_features.csv にまとめてください。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-004
+    tags: [orbital, charged]
+    request: "硫酸イオン SO4 (charge=-2) の HOMO/LUMO を計算してください。電荷とスピンの設定に注意すること。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-005
+    tags: [dataset]
+    request: "data_smi.csv の行数・列・欠損・SMILES の有効性を確認し、QC 結果を features_qc.csv に保存してください。"
+    task_type: dataset_analysis
+    expected_outputs: [features_qc.csv]
+    input_files: [benchmarks/data/data_smi.csv]
+
+  - id: bench-006
+    tags: [descriptors]
+    request: "data_smi.csv の全分子について RDKit 記述子を計算し rdkit_descriptors.csv に保存してください。"
+    task_type: dataset_analysis
+    expected_outputs: [rdkit_descriptors.csv]
+    input_files: [benchmarks/data/data_smi.csv]
+
+  - id: bench-007
+    tags: [regression]
+    request: "data_smi.csv の RDKit 記述子と t, temp 列から target 列を予測する回帰モデルを交差検証し、true-predict プロットを作成してください。"
+    task_type: molecular_regression
+    expected_outputs: [cv_metrics.json, true_vs_pred.png]
+    input_files: [benchmarks/data/data_smi.csv]
+
+  - id: bench-008
+    tags: [regression, orbital, heavy]
+    request: "data_smi.csv の分子の HOMO/LUMO を計算し、その他の特徴量と合わせて target 列を予測する回帰モデルを交差検証で検証し、true-predict プロットを作成してください。"
+    task_type: molecular_regression
+    expected_outputs: [orbital_features.csv, cv_metrics.json, true_vs_pred.png]
+    input_files: [benchmarks/data/data_smi.csv]
+
+  - id: bench-009
+    tags: [3d]
+    request: "アスピリン (CC(=O)Oc1ccccc1C(=O)O) の3D構造を生成し xyz ファイルとして保存してください。"
+    task_type: generic
+    expected_outputs: ["*.xyz"]
+
+  - id: bench-010
+    tags: [recovery]
+    request: "無効な SMILES を含むリスト ['CCO', 'not_a_smiles', 'c1ccccc1'] を標準化し、有効な分子のみの HOMO/LUMO を計算してください。無効分子は除外リストとして報告すること。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-011
+    tags: [recovery, timeout]
+    request: "トルエン (Cc1ccccc1) の HOMO/LUMO を計算してください。まず HF/STO-3G で確実に完了させ、時間が許せば基底を上げてください。"
+    task_type: orbital_calculation
+    expected_outputs: [orbital_features.csv]
+
+  - id: bench-012
+    tags: [reporting]
+    request: "エタノール (CCO) の分子量・LogP・TPSA を計算し、結果を日本語の短い報告として Markdown (report_user.md) と HTML (report_user.html) の両形式で保存してください。"
+    task_type: generic
+    expected_outputs: [report_user.md, report_user.html]

@@ -1,0 +1,39 @@
+# AutoHarnessChem 既定設定（specification.md §2 / §8 / §10）
+runtime:
+  provider: deepagents        # deepagents | claude | openai
+  model: default              # default = 各SDKの既定モデル
+  max_steps: 30
+  max_tool_calls: 20
+  max_replans: 3
+  sandbox:
+    type: docker              # docker | local（docker が無ければ local へ自動フォールバック）
+    image: autoharnesschem/sandbox:latest
+    conda_env: pyscf          # local sandbox が使う conda 環境
+    timeout_sec: 600
+    cpu_limit_sec: 300
+    memory_limit_mb: 4096
+    network: none
+
+# task_type → provider。ベンチマーク実測から更新する（固定的な想定ではない）
+routing:
+  code_editing: claude
+  long_running_research: deepagents
+  hosted_sandbox_execution: openai
+  orbital_calculation: deepagents
+  molecular_regression: deepagents
+  dataset_analysis: deepagents
+  fallback: deepagents
+
+promotion_gate:
+  minimum_task_success_improvement: 0.05
+  maximum_cost_increase: 0.15
+  maximum_latency_increase: 0.20
+  zero_critical_regressions: true
+  security_tests_passed: true
+  human_approval_required: true
+
+mode: development
+self_improvement: true
+skill_lockfile: skills.lock
+runtime_fallback: true
+approval: deny                # interactive | deny | allow（highリスク操作の承認方式）

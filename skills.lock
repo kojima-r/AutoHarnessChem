@@ -1,0 +1,30 @@
+{
+  "dataset-inspection": {
+    "version": "1.0.0",
+    "sha256": "3fe2edce854579380dec7ea03c49523def42ba0009c54b06f8cad66fb606d613"
+  },
+  "execution-recovery": {
+    "version": "1.0.0",
+    "sha256": "f946338be1debfeab96ce2188b4e9c44a65807c52ef0e0aba29a023451e53650"
+  },
+  "molecular-regression": {
+    "version": "1.0.0",
+    "sha256": "6bccfa8f48bb7b02b9c2f9ff61bf37dcc6a0ff33cfee2fbf9be987dec42d4963"
+  },
+  "pyscf-orbitals": {
+    "version": "1.2.0",
+    "sha256": "f90f6ec7aa51bc98bad16169fdb977fdd1c0e13b6f416ea005d465c162edb4a4"
+  },
+  "rdkit-preparation": {
+    "version": "1.0.0",
+    "sha256": "ec22ad1a7cc0888e58740b98dcbe3847deae5ff76c1e64bb449d2b0b70a3116f"
+  },
+  "result-reporting": {
+    "version": "1.1.0",
+    "sha256": "32ae026e97b7f111fd59c802987ea5c644e4da4033af90f90120a80a3251850b"
+  },
+  "scientific-verification": {
+    "version": "1.0.0",
+    "sha256": "f2efd21869ccbf50c24363ec4c4bb2f8578727615163adca8dfcab83b85baf03"
+  }
+}

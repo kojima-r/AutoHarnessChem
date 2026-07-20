@@ -1,0 +1,6 @@
+# 本番実行: 自己改善を無効化し、検証済み Skill バージョンを固定する
+mode: production
+self_improvement: false
+skill_lockfile: skills.lock
+runtime_fallback: true
+approval: deny

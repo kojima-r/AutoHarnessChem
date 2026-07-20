@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoHarnessChem</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --border: #dfe3e8; --text: #1c2733;
+    --muted: #66727e; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c;
+    --warn: #b45309; --run: #6d28d9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14px; }
+  header { background: #111827; color: #fff; padding: .7rem 1.2rem;
+           display: flex; align-items: baseline; gap: 1rem; }
+  header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+  header span { color: #9ca3af; font-size: .8rem; }
+  main { display: grid; grid-template-columns: 400px 1fr; gap: 1rem;
+         padding: 1rem 1.2rem; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 950px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  .card h2 { font-size: .95rem; margin: 0 0 .8rem; }
+  label { display: block; font-size: .78rem; color: var(--muted); margin: .6rem 0 .2rem; }
+  textarea, input[type=text], select {
+    width: 100%; padding: .45rem .6rem; border: 1px solid var(--border);
+    border-radius: 6px; font: inherit; background: #fff; color: inherit; }
+  textarea { min-height: 90px; resize: vertical; }
+  button { font: inherit; border: none; border-radius: 6px; cursor: pointer;
+           padding: .5rem 1rem; }
+  .primary { background: var(--accent); color: #fff; font-weight: 600; width: 100%;
+             margin-top: .8rem; }
+  .primary:disabled { background: #93b4f5; cursor: wait; }
+  .ghost { background: transparent; color: var(--accent); padding: .2rem .4rem; }
+  .badge { display: inline-block; padding: .1em .55em; border-radius: 999px;
+           font-size: .72rem; font-weight: 600; color: #fff; vertical-align: middle; }
+  .b-running { background: var(--run); } .b-succeeded { background: var(--ok); }
+  .b-failed { background: var(--bad); } .b-error { background: var(--bad); }
+  .b-pending { background: var(--muted); }
+  #runs .item { padding: .55rem .4rem; border-bottom: 1px solid var(--border);
+                cursor: pointer; border-radius: 4px; }
+  #runs .item:hover { background: #eef2ff; }
+  #runs .item.sel { background: #e0e9ff; }
+  #runs .desc { color: var(--muted); font-size: .78rem; margin-top: .15rem;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8rem; }
+  pre { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px;
+        padding: .7rem; overflow-x: auto; white-space: pre-wrap;
+        word-break: break-word; font-size: .8rem; }
+  ul.checks { margin: .3rem 0; padding-left: 1.3rem; }
+  ul.checks li.ok::marker { content: "✅ "; } ul.checks li.miss::marker { content: "❌ "; }
+  ul.checks li.warn::marker { content: "⚠️ "; }
+  #trace { max-height: 380px; overflow-y: auto; }
+  .ev { display: flex; gap: .5rem; padding: .3rem 0; border-bottom: 1px dashed #eceff3;
+        align-items: baseline; }
+  .ev .t { flex: 0 0 118px; font-size: .7rem; font-weight: 700; text-transform: uppercase; }
+  .t-tool_call { color: var(--accent); } .t-tool_result { color: var(--ok); }
+  .t-error { color: var(--bad); } .t-final { color: var(--run); }
+  .t-reasoning_summary { color: var(--muted); } .t-artifact { color: var(--warn); }
+  .ev .p { flex: 1; font-size: .8rem; color: #334155; word-break: break-word; }
+  .gallery { display: flex; flex-wrap: wrap; gap: .8rem; }
+  .gallery figure { margin: 0; max-width: 320px; }
+  .gallery img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+  .gallery figcaption { font-size: .72rem; color: var(--muted); word-break: break-all; }
+  .filelist a { display: inline-block; margin: 0 .8rem .3rem 0; color: var(--accent);
+                text-decoration: none; }
+  .filelist a:hover { text-decoration: underline; }
+  .hint { font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+  .row { display: flex; gap: .6rem; } .row > * { flex: 1; }
+  .empty { color: var(--muted); padding: 1.5rem; text-align: center; }
+  #err { color: var(--bad); font-size: .8rem; margin-top: .5rem; white-space: pre-wrap; }
+  iframe.report { width: 100%; height: 480px; border: 1px solid var(--border);
+                  border-radius: 6px; background: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AutoHarnessChem</h1>
+  <span>switchable agentic harness — web console</span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>新しいタスク</h2>
+      <label for="req">リクエスト（自然言語）</label>
+      <textarea id="req" placeholder="例: ベンゼンの HOMO/LUMO を計算して orbital_features.csv に保存してください"></textarea>
+      <div class="row">
+        <div>
+          <label for="provider">Provider</label>
+          <select id="provider"><option value="">auto (routing)</option></select>
+        </div>
+        <div>
+          <label for="ttype">Task type</label>
+          <select id="ttype">
+            <option value="">auto</option>
+            <option>orbital_calculation</option>
+            <option>molecular_regression</option>
+            <option>dataset_analysis</option>
+            <option>generic</option>
+          </select>
+        </div>
+      </div>
+      <label for="expect">期待する出力ファイル（カンマ区切り、省略可）</label>
+      <input type="text" id="expect" placeholder="orbital_features.csv, true_vs_pred.png">
+      <label for="file">入力ファイル（workspace へコピーされます）</label>
+      <input type="file" id="file">
+      <div class="hint" id="upstat"></div>
+      <button class="primary" id="submit">実行する</button>
+      <div id="err"></div>
+    </div>
+    <div class="card">
+      <h2>ラン一覧 <button class="ghost" onclick="loadRuns()">↻</button></h2>
+      <div id="runs"><div class="empty">まだランがありません</div></div>
+    </div>
+  </section>
+
+  <section id="detail">
+    <div class="card"><div class="empty">左のラン一覧から選択するか、新しいタスクを実行してください</div></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let selected = null, traceCursor = 0, uploadedPath = null, pollTimer = null;
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let message = response.status + " " + response.statusText;
+    try { message += ": " + (await response.json()).detail; } catch (e) {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function loadProviders() {
+  try {
+    const data = await api("/api/providers");
+    const select = $("provider");
+    for (const [name, ok] of Object.entries(data.available)) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name + (ok ? "" : " (未インストール)");
+      select.appendChild(option);
+    }
+  } catch (e) { /* 表示のみの情報なので黙って続行 */ }
+}
+
+$("file").addEventListener("change", async () => {
+  const file = $("file").files[0];
+  uploadedPath = null; $("upstat").textContent = "";
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const data = await api("/api/uploads", { method: "POST", body: form });
+    uploadedPath = data.path;
+    $("upstat").textContent = `アップロード済み: ${data.name} (${data.bytes} bytes)`;
+  } catch (e) { $("upstat").textContent = "アップロード失敗: " + e.message; }
+});
+
+$("submit").addEventListener("click", async () => {
+  $("err").textContent = "";
+  const body = {
+    request: $("req").value.trim(),
+    provider: $("provider").value || null,
+    task_type: $("ttype").value || null,
+    expected_outputs: $("expect").value.trim()
+      ? $("expect").value.split(",").map(s => s.trim()).filter(Boolean) : null,
+    input_paths: uploadedPath ? [uploadedPath] : [],
+  };
+  if (!body.request) { $("err").textContent = "リクエストを入力してください"; return; }
+  $("submit").disabled = true;
+  try {
+    const data = await api("/api/tasks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await loadRuns();
+    selectRun(data.run_id);
+  } catch (e) { $("err").textContent = e.message; }
+  $("submit").disabled = false;
+});
+
+function badge(status) {
+  return `<span class="badge b-${esc(status || "pending")}">${esc(status || "?")}</span>`;
+}
+
+async function loadRuns() {
+  const data = await api("/api/runs");
+  const box = $("runs");
+  if (!data.runs.length) {
+    box.innerHTML = '<div class="empty">まだランがありません</div>'; return;
+  }
+  box.innerHTML = data.runs.map(r => `
+    <div class="item ${r.run_id === selected ? "sel" : ""}" onclick="selectRun('${esc(r.run_id)}')">
+      ${badge(r.status)} <span class="mono">${esc(r.run_id)}</span>
+      <span class="hint">${esc(r.provider || "")} ${esc(r.task_type || "")}</span>
+      <div class="desc">${esc(r.description || "")}</div>
+    </div>`).join("");
+}
+
+function selectRun(runId) {
+  selected = runId; traceCursor = 0;
+  $("detail").dataset.trace = "";
+  loadRuns();
+  refreshDetail(true);
+}
+
+async function refreshDetail(reset) {
+  if (!selected) return;
+  let detail;
+  try { detail = await api("/api/runs/" + selected); }
+  catch (e) { $("detail").innerHTML = `<div class="card">${esc(e.message)}</div>`; return; }
+  const trace = await api(`/api/runs/${selected}/trace?after=${reset ? 0 : traceCursor}`);
+  if (reset) $("detail").dataset.trace = "";
+  traceCursor = trace.next;
+  renderDetail(detail, trace.events, reset);
+
+  clearTimeout(pollTimer);
+  if (detail.status === "running") pollTimer = setTimeout(() => refreshDetail(false), 2500);
+}
+
+const RESULT_MARKS = { success: "✔", partial: "◑", failed: "✘", blocked: "⛔" };
+
+function traceLine(event) {
+  const p = event.payload || {};
+  let text;
+  if (event.event_type === "tool_call") {
+    text = `→ ${p.tool} ${JSON.stringify(p.arguments || {}).slice(0, 160)}`;
+  } else if (event.event_type === "tool_result") {
+    text = `${RESULT_MARKS[p.status] || "?"} ${p.tool} [${p.status}] ${p.summary || ""}`
+      + (p.error_type ? ` (error_type=${p.error_type})` : "");
+  } else if (event.event_type === "artifact") {
+    text = `⎘ ${p.path || ""} (${p.bytes ?? "?"}B)`;
+  } else if (p.phase === "start") {
+    text = `開始 provider=${p.provider} task_type=${p.task_type} skills=${(p.skills || []).join(",")}`;
+  } else if (p.phase === "attempt") {
+    text = `試行 ${p.attempt}/${p.max_attempts}`
+      + ((p.repairs || []).length ? `（修復指示 ${p.repairs.length} 件）` : "");
+  } else if (p.phase === "verifying") {
+    text = `Verifier 検査中 (attempt ${p.attempt})`;
+  } else if (p.phase === "finished") {
+    text = `終了 status=${p.status} attempts=${p.attempts}`;
+  } else if (event.actor === "verifier") {
+    text = `検証${p.passed ? "合格" : "不合格"}: missing=${(p.requirements_missing || []).length}`
+      + ` warnings=${(p.scientific_warnings || []).length}`;
+  } else {
+    text = p.text || p.error || p.path || JSON.stringify(p);
+  }
+  if (typeof text !== "string") text = JSON.stringify(text);
+  const stamp = event.timestamp ? new Date(event.timestamp).toLocaleTimeString("ja-JP") : "";
+  return `<div class="ev"><span class="t t-${esc(event.event_type)}">${esc(event.event_type)}</span>
+          <span class="p"><b>${esc(event.actor)}</b> ${esc(String(text).slice(0, 500))}
+          <span class="hint">${esc(stamp)}</span></span></div>`;
+}
+
+function renderDetail(detail, newEvents, reset) {
+  const container = $("detail");
+  const previousTrace = reset ? "" : (container.dataset.trace || "");
+  const traceHtml = previousTrace + (newEvents || []).map(traceLine).join("");
+  container.dataset.trace = traceHtml;
+
+  const verification = detail.report?.verification;
+  const artifacts = detail.artifacts || detail.report?.artifacts || [];
+  const images = artifacts.filter(a => (a.mime || "").startsWith("image/"));
+  const others = artifacts.filter(a => !(a.mime || "").startsWith("image/"));
+  const relative = (p) => p.split("/" + selected + "/").pop();
+  const artifactUrl = (a) => `/api/runs/${selected}/artifacts/${encodeURIComponent(relative(a.path))}`;
+  const userHtml = artifacts.find(a => relative(a.path) === "report_user.html");
+
+  container.innerHTML = `
+    <div class="card">
+      <h2>${badge(detail.status)} <span class="mono">${esc(detail.run_id)}</span>
+        <span class="hint">provider=${esc(detail.provider || "?")}
+        attempts=${esc(detail.report?.attempts ?? detail.attempts ?? "-")}</span></h2>
+      ${detail.error ? `<pre>${esc(detail.error)}</pre>` : ""}
+      ${verification ? `
+        <ul class="checks">
+          ${(verification.requirements_satisfied || []).map(x => `<li class="ok">${esc(x)}</li>`).join("")}
+          ${(verification.requirements_missing || []).map(x => `<li class="miss">${esc(x)}</li>`).join("")}
+          ${(verification.scientific_warnings || []).map(x => `<li class="warn">${esc(x)}</li>`).join("")}
+        </ul>` : ""}
+    </div>
+    <div class="card"><h2>イベント（正規化 trace）</h2>
+      <div id="trace">${traceHtml || '<div class="empty">イベント待ち…</div>'}</div></div>
+    ${artifacts.length ? `
+    <div class="card"><h2>成果物</h2>
+      <div class="gallery">${images.map(a => `
+        <figure><a href="${artifactUrl(a)}" target="_blank"><img src="${artifactUrl(a)}"></a>
+        <figcaption>${esc(relative(a.path))}</figcaption></figure>`).join("")}</div>
+      <div class="filelist">${others.map(a =>
+        `<a href="${artifactUrl(a)}" target="_blank">${esc(relative(a.path))} (${a.bytes}B)</a>`).join("")}</div>
+    </div>` : ""}
+    ${userHtml ? `<div class="card"><h2>ユーザ向け報告 (report_user.html)</h2>
+      <iframe class="report" src="${artifactUrl(userHtml)}"></iframe></div>` : ""}
+    ${detail.report_md ? `<div class="card"><h2>Run report</h2>
+      <pre>${esc(detail.report_md)}</pre></div>` : ""}`;
+  const traceBox = $("trace");
+  if (traceBox) traceBox.scrollTop = traceBox.scrollHeight;
+}
+
+loadProviders();
+loadRuns();
+setInterval(loadRuns, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+"""Sandbox — Agent 生成コードの実行環境。
+
+DockerSandbox: ネットワーク遮断・workspace のみ mount のコンテナで実行（推奨）。
+LocalSandbox : conda 環境 or 現在の python で subprocess 実行（rlimit 付き、開発用）。
+"""
+from __future__ import annotations
+
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from schemas import SandboxConfig
+
+SCRIPT_FILENAME = "script.py"
+
+
+@dataclass
+class SandboxResult:
+    stdout: str
+    stderr: str
+    returncode: int
+    timed_out: bool
+    script_path: str
+    new_files: list[str] = field(default_factory=list)
+
+
+class BaseSandbox:
+    def __init__(self, config: SandboxConfig, workspace: Path):
+        self.config = config
+        self.workspace = Path(workspace)
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+    def run(self, code: str) -> SandboxResult:
+        before = self._snapshot()
+        script_path = self.workspace / SCRIPT_FILENAME
+        script_path.write_text(code, encoding="utf-8")
+        result = self._execute(script_path)
+        result.new_files = sorted(self._snapshot() - before - {str(script_path)})
+        return result
+
+    def _snapshot(self) -> set[str]:
+        return {str(p) for p in self.workspace.rglob("*") if p.is_file()}
+
+    def _execute(self, script_path: Path) -> SandboxResult:
+        raise NotImplementedError
+
+
+class LocalSandbox(BaseSandbox):
+    def _command(self, script_path: Path) -> list[str]:
+        if self.config.conda_env and shutil.which("conda"):
+            return ["conda", "run", "--no-capture-output", "-n", self.config.conda_env,
+                    "python", str(script_path)]
+        import sys
+        return [sys.executable, str(script_path)]
+
+    def _preexec(self):
+        try:
+            import resource
+
+            def limits():
+                cpu = self.config.cpu_limit_sec
+                mem = self.config.memory_limit_mb * 1024 * 1024
+                resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+                resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
+                resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024 * 1024,) * 2)
+
+            return limits
+        except ImportError:
+            return None
+
+    def _execute(self, script_path: Path) -> SandboxResult:
+        try:
+            cp = subprocess.run(
+                self._command(script_path),
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+                timeout=self.config.timeout_sec,
+                preexec_fn=self._preexec(),
+            )
+            return SandboxResult(cp.stdout, cp.stderr, cp.returncode, False, str(script_path))
+        except subprocess.TimeoutExpired as e:
+            return SandboxResult(
+                (e.stdout or ""), (e.stderr or "") + "\n[Timed out]",
+                124, True, str(script_path),
+            )
+
+
+class DockerSandbox(BaseSandbox):
+    def _execute(self, script_path: Path) -> SandboxResult:
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", self.config.network,
+            "--memory", f"{self.config.memory_limit_mb}m",
+            "--cpus", "2",
+            "-v", f"{self.workspace.resolve()}:/workspace",
+            "-w", "/workspace",
+            self.config.image,
+            "python", f"/workspace/{script_path.name}",
+        ]
+        try:
+            cp = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.config.timeout_sec
+            )
+            return SandboxResult(cp.stdout, cp.stderr, cp.returncode, False, str(script_path))
+        except subprocess.TimeoutExpired as e:
+            return SandboxResult(
+                (e.stdout or ""), (e.stderr or "") + "\n[Timed out]",
+                124, True, str(script_path),
+            )
+
+
+def create_sandbox(config: SandboxConfig, workspace: Path) -> BaseSandbox:
+    if config.type == "docker":
+        if shutil.which("docker"):
+            return DockerSandbox(config, workspace)
+        # docker が無い環境では local へフォールバック（runtime_fallback 相当）
+        print("[sandbox] docker not found — falling back to LocalSandbox")
+    return LocalSandbox(config, workspace)
