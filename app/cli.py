@@ -252,7 +252,12 @@ def _cmd_evolve(config, args) -> int:
 
     if args.action == "analyze":
         print(f"runs analyzed: {analysis.n_runs}")
+        print("failure counts:")
         print(json.dumps(analysis.counts, indent=2, ensure_ascii=False))
+        print(f"recoveries detected: {len(analysis.recoveries)}")
+        for rec in analysis.recoveries:
+            change = ",".join(rec.changed_keys) or "retry-only"
+            print(f"  - {rec.tool} [{rec.error_type}] recovered via: {change}")
         return 0
 
     if args.action == "propose":

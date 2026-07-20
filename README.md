@@ -130,7 +130,12 @@ harness 本体のプロセスに torch は不要 — ツールは自己完結ス
 
 ## 自己改善（Harness Evolver）
 
-`traces/` の横断解析 → 失敗分類（analyzer） → SKILL.md への改善候補を unified diff で生成（proposer） → 一時コピー上でベンチマーク再実行（evaluator） → promotion gate 判定（promoter）。
+`traces/` の横断解析 → 失敗分類 + リカバリ検出（analyzer） → SKILL.md への改善候補を unified diff で生成（proposer） → 一時コピー上でベンチマーク再実行（evaluator） → promotion gate 判定（promoter）。
+
+proposer は2段階で提案する:
+
+1. **リカバリベース（優先）** — トレース内で「あるツールが失敗し、後続で同じツールが成功」した箇所を検出し、その際に**どの引数をどう変えたら通ったか**（例: `basis: 6-31g* → sto-3g`）を抽出する。そのツールを `required_tools` に持つ Skill の Recovery procedure へ、再現可能な具体手順として恒久化する。次回以降そのリカバリを再発見せずに済む。
+2. **汎用テンプレート（フォールバック）** — 具体的なリカバリが観測されなかった頻出失敗にのみ、一般的な予防ガイダンスを追記する。同一 (Skill, カテゴリ) が 1 でカバーされていれば汎用提案は抑制される。
 
 - 変更可能: `skills/*/SKILL.md`・Skill付属スクリプト・instructions（`evolver/guard.py` が強制）
 - 変更禁止: Benchmark 正解・Scientific Verifier・Security policy・評価指標・Evolver 自身
