@@ -29,7 +29,8 @@ ahc = "app.cli:main"
 packages = ["app", "schemas", "harness", "tools", "adapters", "evolver", "benchmarks"]
 
 [tool.setuptools.package-data]
-app = ["web/*.html"]
+# vendor/ には SmilesDrawer を同梱している（Web UI の配信と HTML レポートへの埋め込みに使う）
+app = ["web/*.html", "web/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

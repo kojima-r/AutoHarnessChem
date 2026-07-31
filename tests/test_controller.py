@@ -36,6 +36,26 @@ class DummyAdapter:
         pass
 
 
+def test_task_interpreter_routes_new_tool_families():
+    """OptTDDFT / AiZynthFinder を使うリクエストが専用の task_type になる。"""
+    from harness.controller import interpret_task
+
+    cases = {
+        "ベンゼンの HOMO/LUMO を計算して": "orbital_calculation",
+        "クマリンの吸収スペクトルを TDDFT で計算して": "orbital_calculation",
+        "目標波長 500nm に近い分子を Optuna で探索して": "molecular_design",
+        "ESIPT の PES スキャンを実行して": "pes_scan",
+        "パラセタモールの合成経路を AiZynthFinder で探索して": "retrosynthesis_planning",
+        "この反応の収率を予測して": "reaction_prediction",
+    }
+    for request, expected in cases.items():
+        task = interpret_task(request)
+        assert task.task_type == expected, f"{request} -> {task.task_type}"
+        # 期待出力と達成条件が task_type から補完される
+        assert task.expected_outputs
+        assert task.success_criteria
+
+
 def _config(tmp_path):
     config = load_config()
     config.paths.workspaces = tmp_path / "workspaces"

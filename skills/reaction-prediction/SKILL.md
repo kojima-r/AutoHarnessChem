@@ -1,7 +1,7 @@
 ---
 name: reaction-prediction
-description: Predict reaction yield, products (forward), or precursors (retrosynthesis) with pretrained ReactionT5v2 models.
-version: 1.0.0
+description: Predict reaction yield, products (forward), or single-step precursors (retrosynthesis) with pretrained ReactionT5v2 models.
+version: 1.1.0
 risk_level: medium
 required_tools:
   - predict_reaction_t5
@@ -33,6 +33,8 @@ task_types:
 
 # Notes
 
+- **多段の合成経路が必要なら `plan_retrosynthesis`（aizynth-retrosynthesis Skill）を使う。**
+  こちらの `retrosynthesis` は 1 段階の前駆体予測で、購入可能な出発物質まで遡らない。
 - このツールは専用 conda 環境（reactiont5: torch + transformers）で実行される。
   pyscf 環境とは分離されており、`run_python_sandbox` から torch を import しても動かない。
   torch が必要な処理は必ず `predict_reaction_t5` を使うこと。

@@ -13,11 +13,20 @@ runtime:
     cpu_limit_sec: 300
     memory_limit_mb: 4096
     network: none
-    # ツール専用環境（predict_reaction_t5 は torch/transformers を持つ別環境で実行）
+    # ツール専用環境（依存が競合するツールを既定環境から分離する）
     named_envs:
+      # OptTDDFT (tools/OptTDDFT) = pyscf + rdkit + optuna
+      opttddft:
+        conda_env: pyscf
+        image: autoharnesschem/opttddft:latest
+      # ReactionT5 = torch + transformers
       reactiont5:
         conda_env: reactiont5
         image: autoharnesschem/reactiont5:latest
+      # AiZynthFinder = onnxruntime + 学習済み policy/stock
+      aizynth:
+        conda_env: aizynth
+        image: autoharnesschem/aizynth:latest
 
 # task_type → provider。ベンチマーク実測から更新する（固定的な想定ではない）
 routing:
@@ -25,7 +34,11 @@ routing:
   long_running_research: deepagents
   hosted_sandbox_execution: openai
   orbital_calculation: deepagents
+  molecular_design: deepagents
+  pes_scan: deepagents
   molecular_regression: deepagents
+  reaction_prediction: deepagents
+  retrosynthesis_planning: deepagents
   dataset_analysis: deepagents
   fallback: deepagents
 

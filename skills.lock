@@ -1,30 +1,46 @@
 {
+  "aizynth-retrosynthesis": {
+    "version": "1.0.0",
+    "sha256": "5c400c7cbdd945d84f151f28586b73fb0ebec093e9c55c4c2e55a2d010b22025"
+  },
   "dataset-inspection": {
     "version": "1.0.0",
     "sha256": "3fe2edce854579380dec7ea03c49523def42ba0009c54b06f8cad66fb606d613"
   },
-  "execution-recovery": {
+  "esipt-pes-scan": {
     "version": "1.0.0",
-    "sha256": "f946338be1debfeab96ce2188b4e9c44a65807c52ef0e0aba29a023451e53650"
+    "sha256": "0295680c2b3a16ed6949aa4cd795e0828080e90012802ae6516fe31ab7112d02"
+  },
+  "execution-recovery": {
+    "version": "1.1.0",
+    "sha256": "86eda48c6d19dbb8caf2248b88bbd5a6d84cb306a79667a11068f65404f57bbd"
   },
   "molecular-regression": {
     "version": "1.0.0",
     "sha256": "6bccfa8f48bb7b02b9c2f9ff61bf37dcc6a0ff33cfee2fbf9be987dec42d4963"
   },
   "pyscf-orbitals": {
-    "version": "1.2.0",
-    "sha256": "f90f6ec7aa51bc98bad16169fdb977fdd1c0e13b6f416ea005d465c162edb4a4"
+    "version": "2.0.0",
+    "sha256": "c92debfabcf728498459aab3fc6057fa3f6af33ead48bea31473497a13dfa10f"
   },
   "rdkit-preparation": {
-    "version": "1.0.0",
-    "sha256": "ec22ad1a7cc0888e58740b98dcbe3847deae5ff76c1e64bb449d2b0b70a3116f"
+    "version": "1.1.0",
+    "sha256": "b03acc1b315c6eda3ff956a801da5027f56a48af5ba6f28e84a9844c74ec8590"
+  },
+  "reaction-prediction": {
+    "version": "1.1.0",
+    "sha256": "39b65033f724d52431c6c8237845be6db6d54ced40f46cfbc30f194b41c31218"
   },
   "result-reporting": {
-    "version": "1.1.0",
-    "sha256": "32ae026e97b7f111fd59c802987ea5c644e4da4033af90f90120a80a3251850b"
+    "version": "2.0.0",
+    "sha256": "2c4a33f5ec3ce5de3d29fd0a26f40b42e2839f1f6dafd188ff9d3a6e7780aaa0"
   },
   "scientific-verification": {
     "version": "1.0.0",
     "sha256": "f2efd21869ccbf50c24363ec4c4bb2f8578727615163adca8dfcab83b85baf03"
+  },
+  "tddft-molecular-design": {
+    "version": "1.0.0",
+    "sha256": "327c12e374bac71ca9635e1d936cc57a7199b7318b01f50cbe128f6f5773ec5c"
   }
 }

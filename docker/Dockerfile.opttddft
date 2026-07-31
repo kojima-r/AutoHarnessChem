@@ -1,0 +1,34 @@
+# OptTDDFT 用 sandbox image（calculate_orbitals / calculate_tddft_spectrum /
+# optimize_absorption_wavelength / scan_esipt_pes の実行環境）。
+#
+# build（コンテキストはリポジトリルート — tools/OptTDDFT を COPY するため）:
+#   docker build -t autoharnesschem/opttddft:latest -f docker/Dockerfile.opttddft .
+#
+# local sandbox を使う場合はこの image ではなく conda env `pyscf` が使われる
+# （config の sandbox.named_envs.opttddft を参照）。
+FROM condaforge/miniforge3:latest
+
+# numpy は 1.26.4 に固定する（OptTDDFT README: それ以上で計算エラーの報告あり）
+RUN mamba install -y -n base -c conda-forge \
+        python=3.12 \
+        "numpy=1.26.4" \
+        "pyscf=2.11.0" \
+        rdkit \
+        optuna \
+        pyyaml \
+        dill \
+        openpyxl \
+        matplotlib \
+        pandas \
+        python-pptx \
+        scikit-learn \
+    && mamba clean -afy
+
+# geomeTRIC は拘束付き構造最適化（scan_esipt_pes / use_geom_opt）に必要
+RUN pip install --no-cache-dir --no-deps geometric
+
+COPY tools/OptTDDFT /opt/OptTDDFT
+RUN pip install --no-cache-dir --no-deps -e /opt/OptTDDFT
+
+WORKDIR /workspace
+CMD ["python", "--version"]

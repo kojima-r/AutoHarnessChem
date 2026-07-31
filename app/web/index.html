@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AutoHarnessChem</title>
+<!-- 構造式描画: SmilesDrawer 2.x（app/web/vendor に同梱、CDN 不使用） -->
+<script src="/static/smiles-drawer.min.js"></script>
 <style>
   :root {
     --bg: #f5f6f8; --card: #fff; --border: #dfe3e8; --text: #1c2733;
@@ -73,6 +75,38 @@
   #err { color: var(--bad); font-size: .8rem; margin-top: .5rem; white-space: pre-wrap; }
   iframe.report { width: 100%; height: 480px; border: 1px solid var(--border);
                   border-radius: 6px; background: #fff; }
+  /* --- 構造式（SmilesDrawer） --- */
+  .structures { display: flex; flex-wrap: wrap; gap: .7rem; margin: 0; padding: 0;
+                list-style: none; }
+  .structures li { border: 1px solid var(--border); border-radius: 8px; padding: .4rem;
+                   background: #fff; }
+  .structures svg { display: block; width: 210px; height: 160px; }
+  .structures li.reaction svg { width: 440px; height: 170px; }
+  .structures .label { font-size: .74rem; font-weight: 600; margin-top: .2rem; }
+  .structures .smiles { font-family: ui-monospace, Menlo, Consolas, monospace;
+                        font-size: .68rem; color: var(--muted); word-break: break-all;
+                        max-width: 440px; }
+  .structures .src { font-size: .68rem; color: var(--muted); }
+  #smiPreview svg { display: block; width: 100%; max-width: 340px; height: 170px;
+                    border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+  #smiPreview .placeholder { color: var(--muted); font-size: .78rem; padding: .8rem 0; }
+  .ok-text { color: var(--ok); } .bad-text { color: var(--bad); }
+  .chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
+  .chip { background: #eef2ff; color: #1e3a8a; border: 1px solid #c7d2fe;
+          border-radius: 999px; padding: .18rem .6rem; font-size: .75rem;
+          cursor: pointer; }
+  .chip:hover { background: #e0e7ff; }
+  .chip.tmpl { background: #f0fdf4; color: #14532d; border-color: #bbf7d0; }
+  .chip.tmpl:hover { background: #dcfce7; }
+  .mini { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+  .mini figure { margin: 0; border: 1px solid var(--border); border-radius: 6px;
+                 padding: .2rem; background: #fff; }
+  .mini svg { display: block; width: 120px; height: 82px; }
+  .mini svg.reaction { width: 300px; }
+  .mini figcaption { font-family: ui-monospace, Menlo, Consolas, monospace;
+                     font-size: .64rem; color: var(--muted); max-width: 120px;
+                     word-break: break-all; }
+  .mini figure.reaction figcaption { max-width: 300px; }
 </style>
 </head>
 <body>
@@ -86,6 +120,7 @@
       <h2>新しいタスク</h2>
       <label for="req">リクエスト（自然言語）</label>
       <textarea id="req" placeholder="例: ベンゼンの HOMO/LUMO を計算して orbital_features.csv に保存してください"></textarea>
+      <div id="reqStructures"></div>
       <div class="row">
         <div>
           <label for="provider">Provider</label>
@@ -96,7 +131,11 @@
           <select id="ttype">
             <option value="">auto</option>
             <option>orbital_calculation</option>
+            <option>molecular_design</option>
+            <option>pes_scan</option>
             <option>molecular_regression</option>
+            <option>reaction_prediction</option>
+            <option>retrosynthesis_planning</option>
             <option>dataset_analysis</option>
             <option>generic</option>
           </select>
@@ -110,6 +149,24 @@
       <button class="primary" id="submit">実行する</button>
       <div id="err"></div>
     </div>
+
+    <div class="card">
+      <h2>構造アシスト（SMILES → プロンプト）</h2>
+      <label for="smi">SMILES（<code>&gt;&gt;</code> を含めると反応式として描画）</label>
+      <input type="text" id="smi" placeholder="CC(=O)Nc1ccc(O)cc1">
+      <div id="smiPreview"><div class="placeholder">SMILES を入力すると構造を表示します</div></div>
+      <div class="hint" id="smiStat"></div>
+      <div class="row" style="margin-top:.5rem">
+        <button class="ghost" id="smiInsert">プロンプトに挿入</button>
+        <button class="ghost" id="smiClear">クリア</button>
+      </div>
+      <label>よく使う分子・反応</label>
+      <div class="chips" id="presets"></div>
+      <label>タスクテンプレート（クリックでプロンプト・task type・期待出力を設定）</label>
+      <div class="chips" id="templates"></div>
+      <div class="hint" id="tmplHint"></div>
+    </div>
+
     <div class="card">
       <h2>ラン一覧 <button class="ghost" onclick="loadRuns()">↻</button></h2>
       <div id="runs"><div class="empty">まだランがありません</div></div>
@@ -125,6 +182,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let selected = null, traceCursor = 0, uploadedPath = null, pollTimer = null;
+let traceEvents = [];                       // 選択中ランのイベント（構造抽出に使う）
+const csvCache = new Map();                 // "runId|path|bytes" -> パース済み行
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -137,6 +196,239 @@ async function api(path, options) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
   (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// ---------------------------------------------------------------- 構造式描画
+
+const drawer = (typeof SmiDrawer !== "undefined")
+  ? new SmiDrawer({ padding: 4.0 }, { padding: 4.0 }) : null;
+
+/** [data-smiles] を持つ svg を描画する。解釈できない SMILES は onFail で処理。 */
+function drawStructures(root, onFail) {
+  if (!drawer) return;
+  root.querySelectorAll("svg[data-smiles]:not([data-drawn])").forEach((el) => {
+    const smiles = el.getAttribute("data-smiles");
+    el.setAttribute("data-drawn", "1");
+    try {
+      drawer.draw(smiles, el, "light", null, () => onFail && onFail(el, smiles));
+    } catch (e) { if (onFail) onFail(el, smiles); }
+  });
+}
+
+/** 解釈できなかった SMILES はカードごと取り下げる（誤検出を並べない）。 */
+function dropInvalid(el) {
+  (el.closest("figure, li") || el).remove();
+}
+
+const SMILES_SAFE = /^[A-Za-z0-9@+\-[\]()=#$:/\\%.>~{}]+$/;
+// 文中で SMILES と紛れやすい略語（parser を通ってしまうもの）
+const SMILES_DENY = new Set(["CSV", "SCF", "HF", "UV", "CI", "MI", "PES", "MD", "PCM"]);
+
+function looksLikeSmiles(token) {
+  if (!token || token.length > 400 || !SMILES_SAFE.test(token)) return false;
+  if (!/[A-Za-z]/.test(token)) return false;
+  if (SMILES_DENY.has(token.toUpperCase())) return false;
+  if (/\.(csv|json|png|md|html|xyz|log|db|xlsx|pptx)$/i.test(token)) return false;
+  return token.length >= 3 || /[()[\]=#]/.test(token);
+}
+
+const occurrences = (text, char) => text.split(char).length - 1;
+
+/** 前後の日本語・文末記号を落とす。ASCII の括弧は SMILES の一部なので対応が崩れた分だけ外す。 */
+function trimToken(raw) {
+  let token = String(raw).trim()
+    .replace(/^[「『【（]+/, "").replace(/[」』】）。、]+$/, "").replace(/[,;:]+$/, "");
+  if (token.startsWith("(") && token.endsWith(")")
+      && occurrences(token, "(") === occurrences(token, ")")) {
+    token = token.slice(1, -1);                       // 文中の「(CCO)」のような書き方
+  }
+  while (token.endsWith(")") && occurrences(token, ")") > occurrences(token, "(")) {
+    token = token.slice(0, -1);
+  }
+  while (token.startsWith("(") && occurrences(token, "(") > occurrences(token, ")")) {
+    token = token.slice(1);
+  }
+  return token.replace(/\.$/, "");                    // 文末のピリオド（SMILES の . は途中のみ）
+}
+
+/** 自由記述テキストから SMILES 候補を拾う（最終的な妥当性は parser が決める）。 */
+function extractSmiles(text) {
+  const found = [];
+  const add = (token, force) => {
+    const cleaned = trimToken(token);
+    if (!cleaned || found.includes(cleaned)) return;
+    if (force ? SMILES_SAFE.test(cleaned) : looksLikeSmiles(cleaned)) found.push(cleaned);
+  };
+  // 明示的な "SMILES: xxx" は長さ条件を無視して拾う
+  for (const m of text.matchAll(/SMILES\s*[:：]\s*([^\s、。]+)/gi)) add(m[1], true);
+  // 空白と日本語の記号だけで区切る（ASCII 括弧で切ると SMILES が壊れる）
+  for (const token of text.split(/[\s、。「」『』【】　]+/)) add(token, false);
+  return found.slice(0, 12);
+}
+
+function miniFigure(smiles, caption) {
+  const isReaction = smiles.includes(">");
+  return `<figure class="${isReaction ? "reaction" : ""}">
+    <svg class="${isReaction ? "reaction" : ""}" data-smiles="${esc(smiles)}"></svg>
+    <figcaption>${esc(caption ?? smiles)}</figcaption></figure>`;
+}
+
+// ------------------------------------------------- プロンプト補助（構造アシスト）
+
+const PRESETS = [
+  ["ベンゼン", "c1ccccc1"],
+  ["エタノール", "CCO"],
+  ["ホルムアルデヒド", "C=O"],
+  ["アスピリン", "CC(=O)Oc1ccccc1C(=O)O"],
+  ["パラセタモール", "CC(=O)Nc1ccc(O)cc1"],
+  ["カフェイン", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"],
+  ["クマリン", "O=c1ccc2ccccc2o1"],
+  ["硫酸イオン", "[O-]S(=O)(=O)[O-]"],
+  ["アセチル化（反応）", "CC(=O)OC(C)=O.Nc1ccc(O)cc1>>CC(=O)Nc1ccc(O)cc1"],
+];
+
+const TEMPLATES = [
+  {
+    label: "HOMO/LUMO 計算", task_type: "orbital_calculation",
+    expect: "orbital_features.csv",
+    build: (s) => `${s} の HOMO/LUMO と gap を HF/STO-3G で計算し、orbital_features.csv に保存してください。`,
+  },
+  {
+    label: "TDDFT 吸収スペクトル", task_type: "orbital_calculation",
+    expect: "tddft_spectrum.csv, orbital_features.csv",
+    build: (s) => `${s} の吸収スペクトルを TDDFT (b3lyp/sto-3g, nstates=5) で計算し、`
+      + `励起波長と振動子強度を tddft_spectrum.csv にまとめてください。`,
+  },
+  {
+    label: "逆合成経路（AiZynth）", task_type: "retrosynthesis_planning",
+    expect: "retrosynthesis_routes.json, retrosynthesis_routes.csv",
+    build: (s) => `${s} の逆合成経路を AiZynthFinder で探索し、購入可能な出発物質まで`
+      + `到達する経路を段数つきで報告してください。`,
+  },
+  {
+    label: "生成物予測（ReactionT5）", task_type: "reaction_prediction",
+    expect: "reactiont5_predictions.csv",
+    build: (s) => `REACTANT:${s.split(">")[0] || s}REAGENT: の生成物を ReactionT5 で`
+      + `予測し、候補を3つ挙げてください。`,
+  },
+  {
+    label: "収率予測（ReactionT5）", task_type: "reaction_prediction",
+    expect: "reactiont5_predictions.csv",
+    build: (s) => {
+      const parts = s.split(">>");
+      const reactants = parts[0] || s, product = parts[1] || "生成物のSMILES";
+      return `REACTANT:${reactants}REAGENT: PRODUCT:${product} の収率を ReactionT5 で予測してください。`;
+    },
+  },
+  {
+    label: "分子設計（目標波長）", task_type: "molecular_design",
+    expect: "optimization_summary.json, optuna_trials.csv",
+    build: () => `骨格 c1cc([*:1])ccc1[*:2] に置換基 [H, C, O, N, C#N] を付けた分子から、`
+      + `吸収波長が 400 nm に最も近いものを Optuna で 10 trial 探索してください`
+      + `（b3lyp/sto-3g, nstates=5）。`,
+  },
+  {
+    label: "ESIPT PES スキャン", task_type: "pes_scan",
+    expect: "esipt_scan_results.csv, esipt_pes_profile.png",
+    build: (s) => `${s} の ESIPT について、プロトンとアクセプター間の距離を 1.0→1.6 Å まで`
+      + `0.2 Å 刻みで Relaxed PES スキャンし、S0/S1 の障壁を報告してください。`,
+  },
+  {
+    label: "回帰（交差検証）", task_type: "molecular_regression",
+    expect: "cv_metrics.json, true_vs_pred.png",
+    build: () => `アップロードした CSV の RDKit 記述子から target 列を予測する回帰モデルを`
+      + `5-fold 交差検証し、true-predict プロットを作成してください。`,
+  },
+];
+
+function renderPresets() {
+  $("presets").innerHTML = PRESETS.map(([name, smiles], index) =>
+    `<span class="chip" data-preset="${index}" title="${esc(smiles)}">${esc(name)}</span>`).join("");
+  $("presets").querySelectorAll("[data-preset]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      $("smi").value = PRESETS[Number(chip.dataset.preset)][1];
+      updatePreview();
+    });
+  });
+  $("templates").innerHTML = TEMPLATES.map((t, index) =>
+    `<span class="chip tmpl" data-tmpl="${index}">${esc(t.label)}</span>`).join("");
+  $("templates").querySelectorAll("[data-tmpl]").forEach((chip) => {
+    chip.addEventListener("click", () => applyTemplate(TEMPLATES[Number(chip.dataset.tmpl)]));
+  });
+}
+
+function applyTemplate(template) {
+  const smiles = $("smi").value.trim();
+  $("req").value = template.build(smiles || "対象分子のSMILES");
+  $("ttype").value = template.task_type;
+  $("expect").value = template.expect;
+  $("tmplHint").textContent = smiles
+    ? `「${template.label}」を ${smiles} で適用しました`
+    : `「${template.label}」を適用しました（SMILES 欄が空なのでプレースホルダを入れています）`;
+  updateRequestStructures();
+  $("req").focus();
+}
+
+let previewTimer = null;
+function updatePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    const smiles = $("smi").value.trim();
+    const box = $("smiPreview"), stat = $("smiStat");
+    if (!smiles) {
+      box.innerHTML = '<div class="placeholder">SMILES を入力すると構造を表示します</div>';
+      stat.textContent = ""; return;
+    }
+    if (!drawer) {
+      box.innerHTML = '<div class="placeholder">SmilesDrawer を読み込めませんでした</div>';
+      stat.textContent = ""; return;
+    }
+    box.innerHTML = `<svg data-smiles="${esc(smiles)}"></svg>`;
+    let failed = false;
+    drawStructures(box, () => {
+      failed = true;
+      box.innerHTML = '<div class="placeholder">—</div>';
+      stat.innerHTML = '<span class="bad-text">SMILES を解釈できません（括弧・芳香環の閉じ忘れ等を確認）</span>';
+    });
+    if (!failed) {
+      stat.innerHTML = `<span class="ok-text">OK — ${smiles.includes(">") ? "反応式" : "分子"}</span>`
+        + " として描画しました";
+    }
+  }, 250);
+}
+
+let reqTimer = null;
+function updateRequestStructures() {
+  clearTimeout(reqTimer);
+  reqTimer = setTimeout(() => {
+    const box = $("reqStructures");
+    const candidates = extractSmiles($("req").value);
+    if (!candidates.length || !drawer) { box.innerHTML = ""; return; }
+    box.innerHTML = '<div class="hint">プロンプト内の構造（解釈できたものだけ表示）</div>'
+      + '<div class="mini">' + candidates.map((s) => miniFigure(s)).join("") + "</div>";
+    drawStructures(box, dropInvalid);
+    setTimeout(() => {
+      if (!box.querySelector("figure")) box.innerHTML = "";
+    }, 0);
+  }, 400);
+}
+
+$("smi").addEventListener("input", updatePreview);
+$("req").addEventListener("input", updateRequestStructures);
+$("smiInsert").addEventListener("click", () => {
+  const smiles = $("smi").value.trim();
+  if (!smiles) { $("smiStat").textContent = "SMILES を入力してください"; return; }
+  const area = $("req");
+  const at = area.selectionStart ?? area.value.length;
+  area.value = area.value.slice(0, at) + smiles + area.value.slice(at);
+  area.focus();
+  area.selectionStart = area.selectionEnd = at + smiles.length;
+  updateRequestStructures();
+});
+$("smiClear").addEventListener("click", () => {
+  $("smi").value = ""; updatePreview(); $("tmplHint").textContent = "";
+});
+
+// ------------------------------------------------------------------ タスク投入
 
 async function loadProviders() {
   try {
@@ -206,7 +498,7 @@ async function loadRuns() {
 }
 
 function selectRun(runId) {
-  selected = runId; traceCursor = 0;
+  selected = runId; traceCursor = 0; traceEvents = [];
   $("detail").dataset.trace = "";
   loadRuns();
   refreshDetail(true);
@@ -218,9 +510,11 @@ async function refreshDetail(reset) {
   try { detail = await api("/api/runs/" + selected); }
   catch (e) { $("detail").innerHTML = `<div class="card">${esc(e.message)}</div>`; return; }
   const trace = await api(`/api/runs/${selected}/trace?after=${reset ? 0 : traceCursor}`);
-  if (reset) $("detail").dataset.trace = "";
+  if (reset) { $("detail").dataset.trace = ""; traceEvents = []; }
   traceCursor = trace.next;
+  traceEvents = traceEvents.concat(trace.events || []);
   renderDetail(detail, trace.events, reset);
+  updateStructures(detail);
 
   clearTimeout(pollTimer);
   if (detail.status === "running") pollTimer = setTimeout(() => refreshDetail(false), 2500);
@@ -270,8 +564,6 @@ function renderDetail(detail, newEvents, reset) {
   const artifacts = detail.artifacts || detail.report?.artifacts || [];
   const images = artifacts.filter(a => (a.mime || "").startsWith("image/"));
   const others = artifacts.filter(a => !(a.mime || "").startsWith("image/"));
-  const relative = (p) => p.split("/" + selected + "/").pop();
-  const artifactUrl = (a) => `/api/runs/${selected}/artifacts/${encodeURIComponent(relative(a.path))}`;
   const userHtml = artifacts.find(a => relative(a.path) === "report_user.html");
 
   container.innerHTML = `
@@ -287,6 +579,8 @@ function renderDetail(detail, newEvents, reset) {
           ${(verification.scientific_warnings || []).map(x => `<li class="warn">${esc(x)}</li>`).join("")}
         </ul>` : ""}
     </div>
+    <div class="card" id="structureCard" hidden><h2>構造（SMILES から描画）</h2>
+      <div id="structures"></div></div>
     <div class="card"><h2>イベント（正規化 trace）</h2>
       <div id="trace">${traceHtml || '<div class="empty">イベント待ち…</div>'}</div></div>
     ${artifacts.length ? `
@@ -305,6 +599,146 @@ function renderDetail(detail, newEvents, reset) {
   if (traceBox) traceBox.scrollTop = traceBox.scrollHeight;
 }
 
+const relative = (p) => String(p).split("/" + selected + "/").pop();
+const artifactUrl = (a) =>
+  `/api/runs/${selected}/artifacts/${encodeURIComponent(relative(a.path))}`;
+
+// ----------------------------------------------- 結果からの構造抽出（成果物・trace）
+
+const REACTION_PREFIX = /(?:REACTANT|REAGENT|PRODUCT):/;
+
+/** 引用符に対応した最小限の CSV パーサ。 */
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some(v => v !== "")) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); if (row.some(v => v !== "")) rows.push(row); }
+  if (!rows.length) return [];
+  const header = rows[0];
+  return rows.slice(1).map(values =>
+    Object.fromEntries(header.map((key, index) => [key, values[index] ?? ""])));
+}
+
+const SMILES_COLUMNS = /smiles|precursor|prediction|candidate|product|reactant|target/i;
+
+/** ReactionT5 の入力文字列 + 予測から反応 SMILES（reactants>reagents>products）を作る。 */
+function reactionFromT5(row) {
+  const input = row.input || "";
+  if (!REACTION_PREFIX.test(input)) return null;
+  const reactants = (input.match(/REACTANT:([^\s]*?)(?=REAGENT:|PRODUCT:|$)/) || [])[1] || "";
+  const reagents = (input.match(/REAGENT:([^\s]*?)(?=PRODUCT:|$)/) || [])[1] || "";
+  const stated = (input.match(/PRODUCT:([^\s]+)/) || [])[1] || "";
+  const product = stated || row.prediction || "";
+  if (!reactants || !product) return null;
+  const label = row.predicted_yield ? `予測収率 ${row.predicted_yield}%` : "ReactionT5 予測";
+  return { smiles: `${reactants}>${reagents}>${product}`, label };
+}
+
+/** 逆合成経路 CSV から「前駆体 >> 目標分子」の反応式を作る。 */
+function reactionFromRoute(row) {
+  if (!row.precursors || !row.target_smiles) return null;
+  return {
+    smiles: `${row.precursors}>>${row.target_smiles}`,
+    label: `経路 ${row.route_rank || "?"} — ${row.n_steps || "?"} 段 / `
+      + `solved=${row.solved || "?"}`,
+  };
+}
+
+function structuresFromRows(name, rows) {
+  const items = [];
+  for (const row of rows.slice(0, 12)) {
+    const reaction = name.includes("reactiont5") ? reactionFromT5(row)
+      : name.includes("retrosynthesis") ? reactionFromRoute(row) : null;
+    if (reaction) { items.push({ ...reaction, source: name }); continue; }
+    for (const [column, value] of Object.entries(row)) {
+      if (!SMILES_COLUMNS.test(column)) continue;
+      for (const candidate of String(value).split("|")) {
+        const smiles = candidate.trim();
+        if (looksLikeSmiles(smiles)) {
+          items.push({ smiles, label: `${column}`, source: name });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+/** trace の tool_call 引数から SMILES を拾う（CSV が無い段階でも構造が見える）。 */
+function structuresFromTrace() {
+  const items = [];
+  for (const event of traceEvents) {
+    if (event.event_type !== "tool_call") continue;
+    const args = (event.payload || {}).arguments || {};
+    for (const key of ["smiles", "targets", "reactions"]) {
+      for (const value of [].concat(args[key] || [])) {
+        const smiles = String(value).trim();
+        if (looksLikeSmiles(smiles)) {
+          items.push({ smiles, label: `${event.payload.tool}(${key})`, source: "tool_call" });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+async function updateStructures(detail) {
+  const card = $("structureCard"), box = $("structures");
+  if (!card || !box || !drawer) return;
+  const artifacts = detail.artifacts || detail.report?.artifacts || [];
+  const csvArtifacts = artifacts.filter(a => relative(a.path).endsWith(".csv")).slice(0, 6);
+
+  let items = [];
+  for (const artifact of csvArtifacts) {
+    const key = `${selected}|${artifact.path}|${artifact.bytes}`;
+    if (!csvCache.has(key)) {
+      try {
+        const response = await fetch(artifactUrl(artifact));
+        csvCache.set(key, response.ok ? parseCsv(await response.text()) : []);
+      } catch (e) { csvCache.set(key, []); }
+    }
+    items = items.concat(structuresFromRows(relative(artifact.path), csvCache.get(key)));
+  }
+  if (!items.length) items = structuresFromTrace();
+
+  const seen = new Set();
+  items = items.filter(item => {
+    if (seen.has(item.smiles)) return false;
+    seen.add(item.smiles); return true;
+  }).slice(0, 24);
+
+  if (!items.length) { card.hidden = true; box.innerHTML = ""; return; }
+  card.hidden = false;
+  box.innerHTML = '<ul class="structures">' + items.map(item => `
+    <li class="${item.smiles.includes(">") ? "reaction" : ""}">
+      <svg data-smiles="${esc(item.smiles)}"></svg>
+      ${item.label ? `<div class="label">${esc(item.label)}</div>` : ""}
+      <div class="smiles">${esc(item.smiles)}</div>
+      <div class="src">${esc(item.source)}</div></li>`).join("") + "</ul>";
+  drawStructures(box, dropInvalid);
+  setTimeout(() => {
+    if (!box.querySelector("li")) { card.hidden = true; box.innerHTML = ""; }
+  }, 0);
+}
+
+// HTML 側の onclick 属性から呼ぶため明示的に公開する
+window.selectRun = selectRun;
+window.loadRuns = loadRuns;
+
+renderPresets();
 loadProviders();
 loadRuns();
 setInterval(loadRuns, 5000);

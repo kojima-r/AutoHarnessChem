@@ -29,6 +29,24 @@ def test_index_serves_web_ui(client):
     assert "/api/tasks" in response.text
 
 
+def test_static_assets_serve_the_vendored_library(client):
+    c, _ = client
+    response = c.get("/static/smiles-drawer.min.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    assert "window.SmiDrawer" in response.text        # SmilesDrawer 2.x 本体
+    # vendor 以外は配信しない
+    assert c.get("/static/../../skills.lock").status_code in (403, 404)
+    assert c.get("/static/nope.js").status_code == 404
+
+
+def test_index_loads_smiles_drawer_and_prompt_helper(client):
+    c, _ = client
+    index = c.get("/").text
+    assert '<script src="/static/smiles-drawer.min.js"></script>' in index
+    assert 'id="smiPreview"' in index and 'id="templates"' in index
+
+
 def test_skills_and_providers(client):
     c, _ = client
     skills = c.get("/api/skills").json()["skills"]

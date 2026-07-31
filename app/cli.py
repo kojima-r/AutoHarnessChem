@@ -5,6 +5,7 @@
   ahc benchmark [--provider deepagents --provider claude] [--tag smoke]
   ahc verify --workspace workspaces/run-xxxx --task-type orbital_calculation
   ahc evolve analyze | propose | evaluate --proposal <id> | promote --proposal <id>
+  ahc demo [--env all|pyscf|reactiont5|aizynth] [--out DIR]
   ahc api [--port 8000]
 """
 from __future__ import annotations
@@ -19,6 +20,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from harness.config import load_config  # noqa: E402
+
+# examples/ のデモ: conda env 名 → スクリプト（`ahc demo` / examples/run_examples.sh 共通）
+DEMOS = {
+    "pyscf": "pyscf_opt_tddft_demo.py",
+    "aizynth": "aizynth_demo.py",
+    "reactiont5": "reactiont5_demo.py",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,6 +68,15 @@ def main(argv: list[str] | None = None) -> int:
     p_evolve.add_argument("--provider", action="append", dest="providers")
     p_evolve.add_argument("--tag", action="append", dest="tags")
 
+    p_demo = sub.add_parser(
+        "demo", help="各 conda 環境のライブラリを直接使うサンプル（examples/）を実行する")
+    p_demo.add_argument("--env", default="all",
+                        choices=["all", *DEMOS], help="実行するデモ（既定: all）")
+    p_demo.add_argument("--out", help="出力ディレクトリ（既定: examples/output/<env>）")
+    p_demo.add_argument("--arg", action="append", default=[], dest="extra",
+                        help="デモスクリプトへ渡す追加引数。`=` で繋ぐこと "
+                             "（例 --arg=--nstates --arg=10）")
+
     p_api = sub.add_parser("api", help="Web UI + FastAPI サーバを起動する")
     p_api.add_argument("--port", type=int, default=8000)
     p_api.add_argument("--host", default="127.0.0.1")
@@ -77,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verify(config, args)
     if args.command == "evolve":
         return _cmd_evolve(config, args)
+    if args.command == "demo":
+        return _cmd_demo(config, args)
     if args.command == "api":
         import uvicorn
         from app.api import create_app
@@ -238,6 +257,38 @@ def _cmd_verify(config, args) -> int:
     verification = ScientificVerifier().verify(task, Path(args.workspace))
     print(verification.model_dump_json(indent=2))
     return 0 if verification.passed else 2
+
+
+def _cmd_demo(config, args) -> int:
+    """examples/ のデモを該当 conda 環境で実行する（各環境のライブラリ直接利用の例）。"""
+    import shutil
+    import subprocess
+
+    examples_dir = config.paths.root / "examples"
+    if not shutil.which("conda"):
+        print("conda が見つかりません。デモは各環境の python で直接実行してください: "
+              f"python {examples_dir}/<script>.py", file=sys.stderr)
+        return 3
+
+    envs = list(DEMOS) if args.env == "all" else [args.env]
+    failed = []
+    for env in envs:
+        script = examples_dir / DEMOS[env]
+        out_dir = Path(args.out) if args.out else examples_dir / "output" / env
+        print(f"\n=== demo: {env} ({script.name}) → {out_dir} ===", flush=True)
+        completed = subprocess.run(
+            ["conda", "run", "--no-capture-output", "-n", env, "python", str(script),
+             "--out", str(out_dir), *args.extra],
+            check=False,
+        )
+        if completed.returncode != 0:
+            failed.append(f"{env} (exit {completed.returncode})")
+
+    if failed:
+        print(f"\n失敗したデモ: {', '.join(failed)}", file=sys.stderr)
+        return 2
+    print(f"\n全デモが成功しました（{len(envs)} 環境）")
+    return 0
 
 
 def _cmd_evolve(config, args) -> int:

@@ -1,7 +1,7 @@
 ---
 name: rdkit-preparation
 description: Standardize SMILES and build 3D structures with RDKit (ETKDGv3 + MMFF) as input for quantum chemistry.
-version: 1.0.0
+version: 1.1.0
 risk_level: low
 required_tools:
   - standardize_smiles
@@ -25,6 +25,12 @@ task_types:
 
 # Notes
 
+- **量子化学ツールは 3D 構造を内部で生成する。** `calculate_orbitals` /
+  `calculate_tddft_spectrum` / `optimize_absorption_wavelength` は OptTDDFT 側で
+  多コンフォマー探索 + UFF を行うため、これらの前に `generate_3d_structure` を
+  呼ぶ必要はない。このツールを使うのは (a) xyz を成果物として残したいとき、
+  (b) `scan_esipt_pes` に渡す初期構造と原子インデックスを確認したいとき、
+  (c) 構造生成そのものが依頼内容のとき。
 - RDKit のモジュール配置は版により移動する。`rdMolStandardize` は
   `from rdkit.Chem.MolStandardize import rdMolStandardize` を試し、ImportError なら
   `from rdkit.Chem import rdMolStandardize` を使うこと。

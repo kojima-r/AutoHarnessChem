@@ -21,9 +21,12 @@ def new_id(prefix: str) -> str:
 
 
 TaskType = Literal[
-    "orbital_calculation",
+    "orbital_calculation",      # HOMO/LUMO・TDDFT スペクトル（OptTDDFT）
+    "molecular_design",         # 目標物性に近い分子の探索（Optuna + TDDFT）
+    "pes_scan",                 # ESIPT 等の PES スキャン
     "molecular_regression",
-    "reaction_prediction",
+    "reaction_prediction",      # ReactionT5（収率・生成物・1段階逆合成）
+    "retrosynthesis_planning",  # AiZynthFinder による多段の逆合成経路探索
     "dataset_analysis",
     "code_editing",
     "long_running_research",
@@ -94,11 +97,16 @@ class SandboxConfig(BaseModel):
     cpu_limit_sec: int = 300
     memory_limit_mb: int = 4096
     network: Literal["none", "bridge"] = "none"
-    # ツール専用の実行環境。依存が競合するツール（例: ReactionT5 の torch/transformers）を
-    # 既定環境 (pyscf) から分離する。local は conda_env、docker は image で解決される
+    # ツール専用の実行環境。依存が競合するツール（例: ReactionT5 の torch/transformers、
+    # AiZynthFinder の ONNX ランタイム）を既定環境から分離する。
+    # local は conda_env、docker は image で解決される
     named_envs: dict[str, dict[str, str]] = Field(default_factory=lambda: {
+        "opttddft": {"conda_env": "pyscf",
+                     "image": "autoharnesschem/opttddft:latest"},
         "reactiont5": {"conda_env": "reactiont5",
                        "image": "autoharnesschem/reactiont5:latest"},
+        "aizynth": {"conda_env": "aizynth",
+                    "image": "autoharnesschem/aizynth:latest"},
     })
 
 

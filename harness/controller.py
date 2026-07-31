@@ -26,13 +26,21 @@ from harness.verifier import ScientificVerifier
 from schemas import RunReport, RunState, TaskSpec, new_id, utcnow
 from tools import build_default_registry
 
-# タスク種別の判定ルール（Task Interpreter）
+# タスク種別の判定ルール（Task Interpreter）。上から順に最初に一致したものを採用する
 _TASK_TYPE_RULES: list[tuple[str, str]] = [
     # 明示的なMLワークフロー（回帰・交差検証）は reaction 系キーワードより優先する
     (r"回帰|regression|cross.?valid|交差検証|機械学習", "molecular_regression"),
+    # 多段の経路探索（AiZynthFinder）は 1 段階の逆合成予測（ReactionT5）より具体的
+    (r"合成経路|逆合成経路|合成ルート|retrosynthe\w*\s*(route|plan)|route\s*(search|planning)"
+     r"|aizynth|多段", "retrosynthesis_planning"),
     (r"収率|逆合成|レトロ合成|retrosynthesis|生成物.{0,4}予測|反応予測|reactiont5", "reaction_prediction"),
     (r"予測モデル|target.{0,8}予測", "molecular_regression"),
-    (r"homo|lumo|軌道|orbital|励起|吸収スペクトル|エネルギー計算|scf|dft", "orbital_calculation"),
+    (r"esipt|pes.{0,2}スキャン|pes.?scan|ポテンシャル.{0,4}曲面|プロトン移動|反応経路.{0,4}スキャン",
+     "pes_scan"),
+    (r"分子設計|分子.{0,4}探索|材料探索|optuna|目標.{0,6}波長|target.{0,10}wavelength"
+     r"|吸収波長.{0,6}(探索|最適化|設計)|波長.{0,6}(探索|最適化)", "molecular_design"),
+    (r"homo|lumo|軌道|orbital|励起|吸収スペクトル|uv.?vis|tddft|エネルギー計算|scf|dft",
+     "orbital_calculation"),
     (r"データセット|dataset|データ.{0,4}(確認|調査|inspect)|欠損|統計量", "dataset_analysis"),
     (r"リファクタ|refactor|コード修正|bug|バグ", "code_editing"),
     (r"文献|調査レポート|research|survey", "long_running_research"),
@@ -40,8 +48,11 @@ _TASK_TYPE_RULES: list[tuple[str, str]] = [
 
 _DEFAULT_EXPECTED_OUTPUTS = {
     "orbital_calculation": ["orbital_features.csv"],
+    "molecular_design": ["optimization_summary.json", "optuna_trials.csv"],
+    "pes_scan": ["esipt_scan_results.csv", "esipt_pes_profile.png"],
     "molecular_regression": ["cv_metrics.json", "true_vs_pred.png"],
     "reaction_prediction": ["reactiont5_predictions.csv"],
+    "retrosynthesis_planning": ["retrosynthesis_routes.json", "retrosynthesis_routes.csv"],
     "dataset_analysis": [],
     "generic": [],
 }

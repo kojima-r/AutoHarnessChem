@@ -1,8 +1,12 @@
 """共通ツール実装。
 
-すべて ToolResult を返す。重い依存 (rdkit / pyscf / sklearn) は遅延 import し、
+すべて ToolResult を返す。重い依存 (rdkit / sklearn) は遅延 import し、
 無ければ status="failed", error_type="missing_dependency" を返す。
 ファイル出力はすべて workspace 配下に限定する。
+
+量子化学計算（HOMO/LUMO・TDDFT・PES スキャン・MI 探索）は tools/opttddft.py
+（OptTDDFT を専用の pyscf 環境で実行）が担当する。逆合成経路探索は
+tools/aizynth.py。
 """
 from __future__ import annotations
 
@@ -11,8 +15,6 @@ import os
 from pathlib import Path
 
 from schemas import Artifact, ToolResult
-
-HARTREE_TO_EV = 27.211386245988
 
 
 def _missing(module: str) -> ToolResult:
@@ -152,80 +154,7 @@ def generate_3d_structure(workspace: Path, smiles: str, name: str = "molecule") 
 
 
 # ---------------------------------------------------------------------------
-# 4. calculate_orbitals
-# ---------------------------------------------------------------------------
-
-def calculate_orbitals(
-    workspace: Path,
-    smiles: list[str],
-    method: str = "HF",
-    basis: str = "sto-3g",
-    charge: int = 0,
-    spin: int = 0,
-    output_csv: str = "orbital_features.csv",
-) -> ToolResult:
-    try:
-        from pyscf import dft, gto, scf  # noqa: F401
-    except ImportError:
-        return _missing("pyscf")
-
-    rows, failures = [], []
-    for smi in smiles:
-        geom = generate_3d_structure(workspace, smi, name="_tmp_orbital")
-        if geom.status != "success":
-            failures.append({"smiles": smi, "error": geom.summary})
-            continue
-        atom_spec = [(a["symbol"], (a["x"], a["y"], a["z"])) for a in geom.data["atoms"]]
-        try:
-            mol = gto.M(atom=atom_spec, basis=basis, charge=charge, spin=spin, unit="Angstrom")
-            if method.upper() == "HF":
-                mf = scf.RHF(mol) if spin == 0 else scf.UHF(mol)
-            else:
-                mf = dft.RKS(mol) if spin == 0 else dft.UKS(mol)
-                mf.xc = method
-            energy = mf.kernel()
-            if not mf.converged:
-                failures.append({"smiles": smi, "error": "SCF not converged"})
-                continue
-            mo_energy = mf.mo_energy if spin == 0 else mf.mo_energy[0]
-            n_occ = mol.nelectron // 2
-            homo_ev = float(mo_energy[n_occ - 1]) * HARTREE_TO_EV
-            lumo_ev = float(mo_energy[n_occ]) * HARTREE_TO_EV
-            rows.append({
-                "smiles": smi,
-                "method": method, "basis": basis,
-                "total_energy_hartree": float(energy),
-                "homo_ev": homo_ev, "lumo_ev": lumo_ev,
-                "gap_ev": lumo_ev - homo_ev,
-            })
-        except Exception as e:
-            failures.append({"smiles": smi, "error": f"{type(e).__name__}: {e}"})
-
-    if not rows:
-        return ToolResult(status="failed",
-                          summary=f"orbital calculation failed for all {len(smiles)} molecules",
-                          data={"failures": failures}, retryable=True,
-                          error_type="scf_failed")
-
-    import csv as _csv
-    out = workspace / output_csv
-    with out.open("w", newline="", encoding="utf-8") as fp:
-        writer = _csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-
-    status = "success" if not failures else "partial"
-    return ToolResult(
-        status=status,
-        summary=f"computed HOMO/LUMO for {len(rows)}/{len(smiles)} molecules → {out.name}",
-        data={"output_csv": str(out), "results": rows, "failures": failures},
-        artifacts=[_artifact(out)],
-        error_type="scf_failed" if failures else None,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 5. calculate_rdkit_descriptors
+# 4. calculate_rdkit_descriptors
 # ---------------------------------------------------------------------------
 
 def calculate_rdkit_descriptors(
@@ -276,7 +205,7 @@ def calculate_rdkit_descriptors(
 
 
 # ---------------------------------------------------------------------------
-# 6. cross_validate_model
+# 5. cross_validate_model
 # ---------------------------------------------------------------------------
 
 def cross_validate_model(
@@ -372,7 +301,7 @@ def cross_validate_model(
 
 
 # ---------------------------------------------------------------------------
-# 7. inspect_artifact
+# 6. inspect_artifact
 # ---------------------------------------------------------------------------
 
 def inspect_artifact(workspace: Path, path: str, max_bytes: int = 4000) -> ToolResult:
@@ -390,7 +319,7 @@ def inspect_artifact(workspace: Path, path: str, max_bytes: int = 4000) -> ToolR
 
 
 # ---------------------------------------------------------------------------
-# 8. run_python_sandbox  (registry.py で policy + sandbox を束縛して構築)
+# 7. run_python_sandbox  (registry.py で policy + sandbox を束縛して構築)
 # ---------------------------------------------------------------------------
 
 def run_python_sandbox(workspace: Path, code: str, *, sandbox, policy) -> ToolResult:
@@ -427,7 +356,7 @@ def run_python_sandbox(workspace: Path, code: str, *, sandbox, policy) -> ToolRe
 
 
 # ---------------------------------------------------------------------------
-# 9. verify_scientific_result
+# 8. verify_scientific_result
 # ---------------------------------------------------------------------------
 
 def verify_scientific_result(workspace: Path, task_type: str = "generic",
@@ -447,7 +376,7 @@ def verify_scientific_result(workspace: Path, task_type: str = "generic",
 
 
 # ---------------------------------------------------------------------------
-# 10. search_official_documentation
+# 9. search_official_documentation
 # ---------------------------------------------------------------------------
 
 def search_official_documentation(workspace: Path, query: str, max_results: int = 5) -> ToolResult:

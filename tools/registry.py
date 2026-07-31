@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from schemas import SandboxConfig, ToolResult
-from tools import chem, reactiont5
+from tools import aizynth, chem, opttddft, reactiont5, report
 from tools.sandbox import create_sandbox
 
 
@@ -92,21 +92,131 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
         }, ["smiles"]),
         func=bind(chem.generate_3d_structure, workspace),
     ))
+    # 量子化学計算は OptTDDFT（tools/OptTDDFT）を専用の pyscf 環境で実行する
+    qc_sandbox = create_sandbox(sandbox_config, workspace, env="opttddft")
+    solvent = {"type": "string", "enum": ["none", "pcm"], "default": "none",
+               "description": "PCM 溶媒モデルを使うか"}
+    threads = {"type": "integer", "default": 4,
+               "description": "PySCF に許可するスレッド数（全コア占有を防ぐ）"}
+    timeout = {"type": "integer",
+               "description": "この呼び出しの実行上限秒（既定は sandbox の timeout）"}
+
     registry.register(ToolSpec(
         name="calculate_orbitals",
         description=(
-            "RDKit+PySCFで各分子のHOMO/LUMO/gap (eV) と全エネルギーを計算し "
-            "orbital_features.csv に保存する。method は 'HF' または DFT 汎関数名 (例 'b3lyp')。"
+            "OptTDDFT(PySCF) で各分子のHOMO/LUMO/gap (eV) と全エネルギーを計算し "
+            "orbital_features.csv に保存する。method は 'HF' または DFT 汎関数名 "
+            "(例 'b3lyp')。3D構造は RDKit の多コンフォマー探索+UFF で生成。"
+            "励起状態は計算しない（必要なら calculate_tddft_spectrum）。専用conda環境(pyscf)で実行。"
         ),
         parameters=_schema({
             "smiles": smiles_list,
             "method": {"type": "string", "default": "HF"},
             "basis": {"type": "string", "default": "sto-3g"},
             "charge": {"type": "integer", "default": 0},
-            "spin": {"type": "integer", "default": 0},
+            "spin": {"type": "integer", "default": 0,
+                     "description": "2S（不対電子数）。0 以外なら UHF/UKS で計算する"},
+            "solvent_model": solvent,
+            "solvent_eps": {"type": "number", "default": 4.7113},
+            "use_geom_opt": {"type": "boolean", "default": False,
+                             "description": "SCF 前に構造最適化する（geomeTRIC が必要・高コスト）"},
+            "max_cycle": {"type": "integer", "default": 200},
             "output_csv": {"type": "string", "default": "orbital_features.csv"},
+            "timeout_sec": timeout,
+            "threads": threads,
         }, ["smiles"]),
-        func=bind(chem.calculate_orbitals, workspace),
+        func=lambda **kw: opttddft.calculate_orbitals(workspace, sandbox=qc_sandbox, **kw),
+        risk_level="medium",
+    ))
+    registry.register(ToolSpec(
+        name="calculate_tddft_spectrum",
+        description=(
+            "OptTDDFT の TDDFT で励起波長 (nm)・振動子強度・HOMO/LUMO を計算し、"
+            "tddft_spectrum.csv（1状態1行）と orbital_features.csv、UV-Vis スペクトル画像を"
+            "生成する。既定は CAMB3LYP/6-31g(d)。重いので分子数と nstates は控えめにし、"
+            "必要に応じて timeout_sec を上げること。閉殻分子のみ（RKS）。専用conda環境(pyscf)で実行。"
+        ),
+        parameters=_schema({
+            "smiles": smiles_list,
+            "functional": {"type": "string", "default": "CAMB3LYP"},
+            "basis": {"type": "string", "default": "6-31g(d)"},
+            "nstates": {"type": "integer", "default": 10,
+                        "description": "計算する励起状態数。状態が足りない/収束が悪いときは "
+                                       "15〜24 へ増やす（減らすと収束が悪化することがある）"},
+            "charge": {"type": "integer", "default": 0},
+            "solvent_model": solvent,
+            "solvent_eps": {"type": "number", "default": 4.7113},
+            "use_geom_opt": {"type": "boolean", "default": False},
+            "output_csv": {"type": "string", "default": "tddft_spectrum.csv"},
+            "orbital_csv": {"type": "string", "default": "orbital_features.csv"},
+            "plot": {"type": "boolean", "default": True},
+            "timeout_sec": timeout,
+            "threads": threads,
+        }, ["smiles"]),
+        func=lambda **kw: opttddft.calculate_tddft_spectrum(workspace, sandbox=qc_sandbox, **kw),
+        risk_level="medium",
+    ))
+    registry.register(ToolSpec(
+        name="optimize_absorption_wavelength",
+        description=(
+            "骨格SMILES（ダミー原子 [*:1] [*:2] を持つ）と置換基候補から分子を組み立て、"
+            "TDDFT の第一吸収波長が target_wavelength_nm に最も近い分子を Optuna(TPE) で探索する。"
+            "optuna_trials.csv / optimization_summary.json / <study_name>.db を生成し、"
+            "generate_report=true で Excel・PowerPoint・スペクトル画像も出力する。"
+            "1 trial が TDDFT 1 回分のコストなので n_trials と search_timeout_sec で予算を決める。"
+            "専用conda環境(pyscf)で実行。"
+        ),
+        parameters=_schema({
+            "scaffold": {"type": "string",
+                         "description": "例 'c1cc([*:1])ccc1[*:2]'（[*:1] と [*:2] が必須）"},
+            "side_chains_pos1": {"type": "array", "items": {"type": "string"},
+                                 "description": "[*:1] 位の置換基候補（'H' は水素）"},
+            "side_chains_pos2": {"type": "array", "items": {"type": "string"}},
+            "target_wavelength_nm": {"type": "number", "default": 500.0},
+            "n_trials": {"type": "integer", "default": 10},
+            "study_name": {"type": "string", "default": "tddft_mi_optimization",
+                           "description": "SQLite study 名。同名なら過去の探索を再開する"},
+            "functional": {"type": "string", "default": "CAMB3LYP"},
+            "basis": {"type": "string", "default": "6-31g(d)"},
+            "nstates": {"type": "integer", "default": 10},
+            "solvent_model": solvent,
+            "search_timeout_sec": {"type": "integer", "default": 900,
+                                   "description": "探索全体の打ち切り時間（打ち切っても結果は保存される）"},
+            "generate_report": {"type": "boolean", "default": False},
+            "timeout_sec": timeout,
+            "threads": threads,
+        }, ["scaffold", "side_chains_pos1", "side_chains_pos2"]),
+        func=lambda **kw: opttddft.optimize_absorption_wavelength(
+            workspace, sandbox=qc_sandbox, **kw),
+        risk_level="medium",
+    ))
+    registry.register(ToolSpec(
+        name="scan_esipt_pes",
+        description=(
+            "ESIPT（励起状態分子内プロトン移動）の Relaxed PES スキャン。指定した2原子間距離を"
+            "拘束して構造最適化 + TDDFT を繰り返し、esipt_scan_results.csv（S0/S1 エネルギー、"
+            "相対 kcal/mol）・esipt_pes_profile.png・esipt_scan_summary.json を生成する。"
+            "原子インデックスは 0 始まりで、SMILES ではなく既知の XYZ 座標から指定すること。"
+            "拘束付き構造最適化に geomeTRIC が必要。専用conda環境(pyscf)で実行。"
+        ),
+        parameters=_schema({
+            "atom_idx_1": {"type": "integer", "description": "移動するプロトン H の index（0始まり）"},
+            "atom_idx_2": {"type": "integer", "description": "アクセプター原子（N/O 等）の index"},
+            "xyz": {"type": "string",
+                    "description": "初期構造（'元素記号 X Y Z' を改行区切り）。xyz_file と排他"},
+            "xyz_file": {"type": "string", "description": "workspace 内の XYZ ファイル"},
+            "start_dist": {"type": "number", "default": 1.0},
+            "end_dist": {"type": "number", "default": 2.0},
+            "step_size": {"type": "number", "default": 0.1},
+            "functional": {"type": "string", "default": "CAMB3LYP"},
+            "basis": {"type": "string", "default": "6-31g(d)"},
+            "nstates": {"type": "integer", "default": 5},
+            "solvent_model": solvent,
+            "opt_max_steps": {"type": "integer", "default": 50},
+            "timeout_sec": timeout,
+            "threads": threads,
+        }, ["atom_idx_1", "atom_idx_2"]),
+        func=lambda **kw: opttddft.scan_esipt_pes(workspace, sandbox=qc_sandbox, **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(
@@ -172,6 +282,65 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
         }, ["reactions", "task"]),
         func=lambda **kw: reactiont5.predict_reaction_t5(workspace, sandbox=t5_sandbox, **kw),
         risk_level="medium",
+    ))
+    # AiZynthFinder は ONNX モデル + stock DB を持つ別環境で実行する
+    aizynth_sandbox = create_sandbox(sandbox_config, workspace, env="aizynth")
+    registry.register(ToolSpec(
+        name="plan_retrosynthesis",
+        description=(
+            "AiZynthFinder で目標分子の逆合成経路を多段探索する（expansion policy + stock）。"
+            "purchasable な出発物質まで到達した経路を retrosynthesis_routes.json（経路木）と "
+            "retrosynthesis_routes.csv（1経路1行の要約）に保存する。"
+            "predict_reaction_t5(task='retrosynthesis') が1段階の前駆体予測なのに対し、"
+            "こちらは経路全体の探索。1分子あたり time_limit_sec まで探索する。"
+            "専用conda環境(aizynth)で実行し、学習済みモデル(config.yml)が必要。"
+        ),
+        parameters=_schema({
+            "targets": {"type": "array", "items": {"type": "string"},
+                        "description": "目標分子の SMILES（正準化済みが望ましい）"},
+            "algorithm": {"type": "string", "enum": ["mcts", "retrostar"], "default": "mcts"},
+            "iteration_limit": {"type": "integer", "default": 100,
+                                "description": "探索の反復上限（増やすと解けやすいが遅い）"},
+            "time_limit_sec": {"type": "integer", "default": 120,
+                               "description": "1分子あたりの探索時間上限"},
+            "max_transforms": {"type": "integer", "default": 6,
+                               "description": "経路の最大段数"},
+            "n_routes": {"type": "integer", "default": 5,
+                         "description": "1分子あたり保存する上位経路数"},
+            "stock": {"type": "array", "items": {"type": "string"},
+                      "description": "使う stock 名（既定: config.yml の全件）"},
+            "expansion": {"type": "array", "items": {"type": "string"},
+                          "description": "使う expansion policy 名（既定: 先頭のもの）"},
+            "filter_policy": {"type": "array", "items": {"type": "string"},
+                              "description": "反応の実現性フィルタ（既定: 未使用）"},
+            "config_yaml": {"type": "string",
+                            "description": "AiZynthFinder の config.yml（既定: AIZYNTH_CONFIG 等から自動解決）"},
+            "timeout_sec": {"type": "integer"},
+            "memory_limit_mb": {"type": "integer", "default": 16384,
+                                "description": "stock DB と ONNX を載せるためのメモリ上限"},
+        }, ["targets"]),
+        func=lambda **kw: aizynth.plan_retrosynthesis(
+            workspace, sandbox=aizynth_sandbox, **kw),
+        risk_level="medium",
+    ))
+    registry.register(ToolSpec(
+        name="render_report_html",
+        description=(
+            "report_user.md を構造式付きの report_user.html に変換する。SmilesDrawer を"
+            "HTML に埋め込むのでオフラインでも構造が描画される。Markdown 側では "
+            "```smiles フェンス（1行 = 'SMILES ラベル'、`>` を含む行は反応式）と、"
+            "文中の `smiles:<SMILES>` が構造になる。auto_structures=true（既定）なら "
+            "workspace の CSV の SMILES 列からも構造一覧を自動生成する。"
+        ),
+        parameters=_schema({
+            "markdown_path": {"type": "string", "default": "report_user.md"},
+            "output_html": {"type": "string", "default": "report_user.html"},
+            "auto_structures": {"type": "boolean", "default": True,
+                                "description": "成果物CSVのSMILES列から構造一覧を追加する"},
+            "inline_library": {"type": "boolean", "default": True,
+                               "description": "SmilesDrawer を埋め込む（false なら Web UI 配信URLを参照）"},
+        }, []),
+        func=bind(report.render_report_html, workspace),
     ))
     registry.register(ToolSpec(
         name="verify_scientific_result",

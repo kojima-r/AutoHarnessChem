@@ -1,0 +1,24 @@
+# AiZynthFinder 用 sandbox image（plan_retrosynthesis の実行環境）。
+#
+# build:
+#   docker build -t autoharnesschem/aizynth:latest -f docker/Dockerfile.aizynth docker/
+#
+# 注意: sandbox は network=none で実行されるため、expansion policy と stock は
+# build 時にイメージへ焼き込む（実行時のダウンロードは不可）。合計 ~1GB。
+# local sandbox を使う場合はこの image ではなく conda env `aizynth` が使われる
+# （config の sandbox.named_envs.aizynth を参照）。
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir "aizynthfinder[all]"
+
+# 公開モデル（USPTO expansion policy + ZINC stock）を取得し、config.yml を生成する。
+# download_public_data は絶対パスで config.yml を書くので、この場所がそのまま使える。
+RUN mkdir -p /opt/aizynth_data \
+    && download_public_data /opt/aizynth_data
+
+# tools/aizynth.py は AIZYNTH_CONFIG → AIZYNTH_DATA → 既定ディレクトリの順に config を探す
+ENV AIZYNTH_CONFIG=/opt/aizynth_data/config.yml
+ENV AIZYNTH_DATA=/opt/aizynth_data
+
+WORKDIR /workspace
+CMD ["python", "--version"]

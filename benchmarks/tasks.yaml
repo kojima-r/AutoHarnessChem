@@ -83,6 +83,18 @@ tasks:
     task_type: reaction_prediction
     expected_outputs: [reactiont5_predictions.csv]
 
+  - id: bench-015
+    tags: [tddft, orbital, heavy]
+    request: "ホルムアルデヒド (C=O) の吸収スペクトルを TDDFT (b3lyp/sto-3g, nstates=5) で計算し、励起波長と振動子強度を tddft_spectrum.csv にまとめてください。"
+    task_type: orbital_calculation
+    expected_outputs: [tddft_spectrum.csv, orbital_features.csv]
+
+  - id: bench-016
+    tags: [retro, planning]
+    request: "パラセタモール (CC(=O)Nc1ccc(O)cc1) の逆合成経路を AiZynthFinder で探索し、購入可能な出発物質まで到達する経路を報告してください。"
+    task_type: retrosynthesis_planning
+    expected_outputs: [retrosynthesis_routes.json, retrosynthesis_routes.csv]
+
   - id: bench-012
     tags: [reporting]
     request: "エタノール (CCO) の分子量・LogP・TPSA を計算し、結果を日本語の短い報告として Markdown (report_user.md) と HTML (report_user.html) の両形式で保存してください。"

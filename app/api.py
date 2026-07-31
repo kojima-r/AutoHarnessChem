@@ -7,6 +7,7 @@
 - GET  /api/runs/{id}/artifacts/{path}  成果物ファイル配信（画像・HTML報告等）
 - POST /api/uploads         入力ファイルのアップロード（python-multipart 必要）
 - GET  /api/skills, /api/providers
+- GET  /static/{name}       同梱フロントエンドライブラリ（SmilesDrawer 等）
 
 NOTE: `from __future__ import annotations` を付けないこと。エンドポイント内で
 定義した Pydantic モデルの注釈が文字列化され、FastAPI が body として解決できなくなる。
@@ -20,6 +21,7 @@ from typing import Any
 from harness.config import HarnessConfig
 
 WEB_DIR = Path(__file__).parent / "web"
+VENDOR_DIR = WEB_DIR / "vendor"
 
 
 def create_app(config: HarnessConfig):
@@ -190,5 +192,15 @@ def create_app(config: HarnessConfig):
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index():
         return (WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+    @app.get("/static/{name}", include_in_schema=False)
+    def static_asset(name: str):
+        """同梱ライブラリ（SmilesDrawer 等）の配信。CDN を使わないためのもの。"""
+        target = (VENDOR_DIR / name).resolve()
+        if target.parent != VENDOR_DIR.resolve() or not target.is_file():
+            raise HTTPException(404, f"asset not found: {name}")
+        media = "text/javascript" if target.suffix == ".js" else None
+        return FileResponse(target, media_type=media,
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     return app
