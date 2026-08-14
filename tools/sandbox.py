@@ -111,6 +111,32 @@ class DockerSandbox(BaseSandbox):
             )
 
 
+# docker image の可用性チェック結果（image 名 → 使えるか）。1 run で複数の sandbox を
+# 作るため、同じ image を何度も問い合わせない
+_DOCKER_IMAGE_CACHE: dict[str, bool] = {}
+
+
+def docker_image_available(image: str) -> bool:
+    """image がローカルにあり docker daemon に到達できるか（結果はキャッシュする）。
+
+    `docker` バイナリがあってもイメージ未ビルド・daemon 停止・権限不足なら
+    `docker run` は起動前に失敗する（returncode 125 等）ため、事前に確認して
+    LocalSandbox へフォールバックできるようにする。
+    """
+    if image in _DOCKER_IMAGE_CACHE:
+        return _DOCKER_IMAGE_CACHE[image]
+    available = False
+    if shutil.which("docker"):
+        try:
+            probe = subprocess.run(["docker", "image", "inspect", image],
+                                   capture_output=True, text=True, timeout=20)
+            available = probe.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            available = False
+    _DOCKER_IMAGE_CACHE[image] = available
+    return available
+
+
 def create_sandbox(config: SandboxConfig, workspace: Path,
                    env: str | None = None) -> BaseSandbox:
     """env を指定すると named_envs の設定（conda_env / image）で上書きした
@@ -122,8 +148,12 @@ def create_sandbox(config: SandboxConfig, workspace: Path,
             "image": override.get("image", config.image),
         })
     if config.type == "docker":
-        if shutil.which("docker"):
+        if docker_image_available(config.image):
             return DockerSandbox(config, workspace)
-        # docker が無い環境では local へフォールバック（runtime_fallback 相当）
-        print("[sandbox] docker not found — falling back to LocalSandbox")
+        # docker が使えない（未インストール / image 未ビルド / daemon 停止）場合は
+        # conda 環境での実行へフォールバックする（runtime_fallback 相当）
+        reason = ("docker not found" if not shutil.which("docker")
+                  else f"image `{config.image}` is unavailable")
+        print(f"[sandbox] {reason} — falling back to LocalSandbox "
+              f"(conda env `{config.conda_env}`)")
     return LocalSandbox(config, workspace)

@@ -35,20 +35,19 @@ class ScientificVerifier:
                 missing.append(f"output missing: {pattern}")
                 repairs.append(f"必要な出力 `{pattern}` を workspace 直下に生成してください。")
 
-        # 2) ドメイン別の科学的妥当性チェック
-        if task.task_type == "orbital_calculation":
-            warnings += self._check_orbitals(workspace, repairs)
-            warnings += self._check_spectrum(workspace, repairs)
-        elif task.task_type == "molecular_design":
-            warnings += self._check_molecular_design(workspace, repairs)
-        elif task.task_type == "pes_scan":
-            warnings += self._check_pes_scan(workspace, repairs)
-        elif task.task_type == "molecular_regression":
-            warnings += self._check_regression(workspace, repairs)
-        elif task.task_type == "reaction_prediction":
-            warnings += self._check_reaction_prediction(workspace, repairs)
-        elif task.task_type == "retrosynthesis_planning":
-            warnings += self._check_retrosynthesis(workspace, repairs)
+        # 2) ドメイン別の科学的妥当性チェック。複合タスクでは secondary の側面も
+        #    検査する（各チェックは対象ファイルが無ければ何もしない）
+        checks = {
+            "orbital_calculation": (self._check_orbitals, self._check_spectrum),
+            "molecular_design": (self._check_molecular_design,),
+            "pes_scan": (self._check_pes_scan,),
+            "molecular_regression": (self._check_regression,),
+            "reaction_prediction": (self._check_reaction_prediction,),
+            "retrosynthesis_planning": (self._check_retrosynthesis,),
+        }
+        for task_type in [task.task_type, *task.secondary_task_types]:
+            for check in checks.get(task_type, ()):
+                warnings += check(workspace, repairs)
 
         passed = not missing and not repairs
         return VerificationResult(

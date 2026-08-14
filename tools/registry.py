@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from schemas import SandboxConfig, ToolResult
-from tools import aizynth, chem, opttddft, reactiont5, report
+from tools import aizynth, chem, chemenv, opttddft, reactiont5, report
 from tools.sandbox import create_sandbox
 
 
@@ -41,7 +41,9 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [self._tools[n] for n in self.names()]
 
-    def call(self, name: str, **kwargs: Any) -> ToolResult:
+    # ツール名は位置専用にする（`name` という引数を持つツール — 例
+    # generate_3d_structure(name=...) — を呼べるようにするため）
+    def call(self, name: str, /, **kwargs: Any) -> ToolResult:
         if name not in self._tools:
             return ToolResult(status="failed", summary=f"unknown tool: {name}",
                               retryable=False, error_type="unknown_tool")
@@ -71,35 +73,51 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
     smiles_list = {"type": "array", "items": {"type": "string"},
                    "description": "SMILES strings"}
 
+    # RDKit / pandas / scikit-learn 系も専用環境で実行する（harness 環境に
+    # これらの依存を持たせない。既定は conda env `pyscf`）
+    chem_sandbox = create_sandbox(sandbox_config, workspace, env=chemenv.ENV_NAME)
     registry.register(ToolSpec(
         name="inspect_dataset",
-        description="CSVデータセットの行数・列型・欠損・統計量・先頭行を調べる。",
+        description=("CSVデータセットの行数・列型・欠損・統計量・先頭行を調べる"
+                     "（pandas を持つ専用環境で実行）。"),
         parameters=_schema({"path": {"type": "string", "description": "CSV path"}}, ["path"]),
-        func=bind(chem.inspect_dataset, workspace),
+        func=lambda **kw: chemenv.inspect_dataset(workspace, sandbox=chem_sandbox, **kw),
     ))
     registry.register(ToolSpec(
         name="standardize_smiles",
-        description="SMILESをRDKitで標準化（Cleanup + FragmentParent）し正準SMILESを返す。",
+        description=("SMILESをRDKitで標準化（Cleanup + FragmentParent）し正準SMILESを返す"
+                     "（RDKit を持つ専用環境で実行）。"),
         parameters=_schema({"smiles": smiles_list}, ["smiles"]),
-        func=bind(chem.standardize_smiles, workspace),
+        func=lambda **kw: chemenv.standardize_smiles(workspace, sandbox=chem_sandbox, **kw),
     ))
     registry.register(ToolSpec(
         name="generate_3d_structure",
-        description="SMILESから3D構造を生成（ETKDGv3 + MMFF最適化）し、xyzファイルを保存する。",
+        description=("SMILESから3D構造を生成（ETKDGv3 + MMFF最適化）し、xyzファイルを保存する。"
+                     "量子化学ツールは内部で構造生成するので、xyz を成果物として残したい場合や "
+                     "scan_esipt_pes の初期構造を用意する場合に使う。"),
         parameters=_schema({
             "smiles": {"type": "string"},
             "name": {"type": "string", "description": "output basename (default: molecule)"},
         }, ["smiles"]),
-        func=bind(chem.generate_3d_structure, workspace),
+        func=lambda **kw: chemenv.generate_3d_structure(workspace, sandbox=chem_sandbox, **kw),
     ))
-    # 量子化学計算は OptTDDFT（tools/OptTDDFT）を専用の pyscf 環境で実行する
+    # 量子化学計算は OptTDDFT（tools/OptTDDFT）を専用の pyscf 環境で実行する。
+    # 構造最適化（geomeTRIC）が必要な呼び出しだけ、geomeTRIC を持つ環境へ振り分ける
     qc_sandbox = create_sandbox(sandbox_config, workspace, env="opttddft")
+    geom_sandbox = create_sandbox(sandbox_config, workspace, env="esipt")
+
+    def qc_env(arguments: dict):
+        """use_geom_opt=true なら geomeTRIC のある環境を使う。"""
+        return geom_sandbox if arguments.get("use_geom_opt") else qc_sandbox
     solvent = {"type": "string", "enum": ["none", "pcm"], "default": "none",
                "description": "PCM 溶媒モデルを使うか"}
     threads = {"type": "integer", "default": 4,
                "description": "PySCF に許可するスレッド数（全コア占有を防ぐ）"}
     timeout = {"type": "integer",
                "description": "この呼び出しの実行上限秒（既定は sandbox の timeout）"}
+    memory = {"type": "integer", "default": opttddft.DEFAULT_MEMORY_LIMIT_MB,
+              "description": ("メモリ上限 (MB)。SIGSEGV / out_of_memory で落ちる場合は"
+                              "上げる（基底関数を大きくすると必要量が増える）")}
 
     registry.register(ToolSpec(
         name="calculate_orbitals",
@@ -107,7 +125,9 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "OptTDDFT(PySCF) で各分子のHOMO/LUMO/gap (eV) と全エネルギーを計算し "
             "orbital_features.csv に保存する。method は 'HF' または DFT 汎関数名 "
             "(例 'b3lyp')。3D構造は RDKit の多コンフォマー探索+UFF で生成。"
-            "励起状態は計算しない（必要なら calculate_tddft_spectrum）。専用conda環境(pyscf)で実行。"
+            "励起状態は計算しない（必要なら calculate_tddft_spectrum）。"
+            "同じ output_csv へ複数回呼ぶと結果は累積される（同じ smiles/method/basis の"
+            "行だけ置換）ので、1分子ずつ呼んでも前の結果は消えない。専用conda環境(pyscf)で実行。"
         ),
         parameters=_schema({
             "smiles": smiles_list,
@@ -119,13 +139,15 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "solvent_model": solvent,
             "solvent_eps": {"type": "number", "default": 4.7113},
             "use_geom_opt": {"type": "boolean", "default": False,
-                             "description": "SCF 前に構造最適化する（geomeTRIC が必要・高コスト）"},
+                             "description": ("SCF 前に構造最適化する（高コスト）。true にすると"
+                                             "geomeTRIC を持つ専用環境で実行される")},
             "max_cycle": {"type": "integer", "default": 200},
             "output_csv": {"type": "string", "default": "orbital_features.csv"},
             "timeout_sec": timeout,
             "threads": threads,
+            "memory_limit_mb": memory,
         }, ["smiles"]),
-        func=lambda **kw: opttddft.calculate_orbitals(workspace, sandbox=qc_sandbox, **kw),
+        func=lambda **kw: opttddft.calculate_orbitals(workspace, sandbox=qc_env(kw), **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(
@@ -134,7 +156,8 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "OptTDDFT の TDDFT で励起波長 (nm)・振動子強度・HOMO/LUMO を計算し、"
             "tddft_spectrum.csv（1状態1行）と orbital_features.csv、UV-Vis スペクトル画像を"
             "生成する。既定は CAMB3LYP/6-31g(d)。重いので分子数と nstates は控えめにし、"
-            "必要に応じて timeout_sec を上げること。閉殻分子のみ（RKS）。専用conda環境(pyscf)で実行。"
+            "必要に応じて timeout_sec を上げること。閉殻分子のみ（RKS）。"
+            "同じ CSV へ複数回呼ぶと結果は累積される。専用conda環境(pyscf)で実行。"
         ),
         parameters=_schema({
             "smiles": smiles_list,
@@ -152,15 +175,19 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "plot": {"type": "boolean", "default": True},
             "timeout_sec": timeout,
             "threads": threads,
+            "memory_limit_mb": memory,
         }, ["smiles"]),
-        func=lambda **kw: opttddft.calculate_tddft_spectrum(workspace, sandbox=qc_sandbox, **kw),
+        func=lambda **kw: opttddft.calculate_tddft_spectrum(
+            workspace, sandbox=qc_env(kw), **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(
         name="optimize_absorption_wavelength",
         description=(
             "骨格SMILES（ダミー原子 [*:1] [*:2] を持つ）と置換基候補から分子を組み立て、"
-            "TDDFT の第一吸収波長が target_wavelength_nm に最も近い分子を Optuna(TPE) で探索する。"
+            "TDDFT の吸収波長が target_wavelength_nm に最も近い分子を Optuna(TPE) で探索する。"
+            "既定では振動子強度が最大の吸収帯（= 実測される帯）を目標に合わせる"
+            "（objective='longest' で最長波長にできるが、暗状態を追いやすい）。"
             "optuna_trials.csv / optimization_summary.json / <study_name>.db を生成し、"
             "generate_report=true で Excel・PowerPoint・スペクトル画像も出力する。"
             "1 trial が TDDFT 1 回分のコストなので n_trials と search_timeout_sec で予算を決める。"
@@ -173,6 +200,13 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
                                  "description": "[*:1] 位の置換基候補（'H' は水素）"},
             "side_chains_pos2": {"type": "array", "items": {"type": "string"}},
             "target_wavelength_nm": {"type": "number", "default": 500.0},
+            "objective": {"type": "string", "enum": ["strongest", "longest"],
+                          "default": "strongest",
+                          "description": ("目標に合わせる波長。'strongest'=振動子強度が"
+                                          "最大の吸収帯（実測される帯・推奨）、"
+                                          "'longest'=最長波長（暗状態になりやすい）")},
+            "min_oscillator_strength": {"type": "number", "default": 0.01,
+                                        "description": "この強度未満の状態は吸収帯として扱わない"},
             "n_trials": {"type": "integer", "default": 10},
             "study_name": {"type": "string", "default": "tddft_mi_optimization",
                            "description": "SQLite study 名。同名なら過去の探索を再開する"},
@@ -185,9 +219,10 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "generate_report": {"type": "boolean", "default": False},
             "timeout_sec": timeout,
             "threads": threads,
+            "memory_limit_mb": memory,
         }, ["scaffold", "side_chains_pos1", "side_chains_pos2"]),
         func=lambda **kw: opttddft.optimize_absorption_wavelength(
-            workspace, sandbox=qc_sandbox, **kw),
+            workspace, sandbox=qc_env(kw), **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(
@@ -197,7 +232,7 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "拘束して構造最適化 + TDDFT を繰り返し、esipt_scan_results.csv（S0/S1 エネルギー、"
             "相対 kcal/mol）・esipt_pes_profile.png・esipt_scan_summary.json を生成する。"
             "原子インデックスは 0 始まりで、SMILES ではなく既知の XYZ 座標から指定すること。"
-            "拘束付き構造最適化に geomeTRIC が必要。専用conda環境(pyscf)で実行。"
+            "拘束付き構造最適化を含むため、geomeTRIC を持つ専用conda環境(pyscf_esipt)で実行。"
         ),
         parameters=_schema({
             "atom_idx_1": {"type": "integer", "description": "移動するプロトン H の index（0始まり）"},
@@ -215,8 +250,10 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "opt_max_steps": {"type": "integer", "default": 50},
             "timeout_sec": timeout,
             "threads": threads,
+            "memory_limit_mb": memory,
         }, ["atom_idx_1", "atom_idx_2"]),
-        func=lambda **kw: opttddft.scan_esipt_pes(workspace, sandbox=qc_sandbox, **kw),
+        # 拘束付き構造最適化が必須なので、常に geomeTRIC のある環境で実行する
+        func=lambda **kw: opttddft.scan_esipt_pes(workspace, sandbox=geom_sandbox, **kw),
         risk_level="medium",
     ))
     registry.register(ToolSpec(
@@ -226,7 +263,8 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "smiles": smiles_list,
             "output_csv": {"type": "string", "default": "rdkit_descriptors.csv"},
         }, ["smiles"]),
-        func=bind(chem.calculate_rdkit_descriptors, workspace),
+        func=lambda **kw: chemenv.calculate_rdkit_descriptors(
+            workspace, sandbox=chem_sandbox, **kw),
     ))
     registry.register(ToolSpec(
         name="cross_validate_model",
@@ -240,8 +278,12 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "model": {"type": "string", "enum": ["random_forest", "ridge"], "default": "random_forest"},
             "n_folds": {"type": "integer", "default": 5},
             "drop_columns": {"type": "array", "items": {"type": "string"}},
+            "memory_limit_mb": {"type": "integer",
+                                "default": chemenv.DEFAULT_MEMORY_LIMIT_MB,
+                                "description": "メモリ上限 (MB)。大きなデータでは上げる"},
         }, ["features_csv", "target_column"]),
-        func=bind(chem.cross_validate_model, workspace),
+        func=lambda **kw: chemenv.cross_validate_model(
+            workspace, sandbox=chem_sandbox, **kw),
     ))
     registry.register(ToolSpec(
         name="inspect_artifact",

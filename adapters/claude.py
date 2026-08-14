@@ -32,7 +32,7 @@ class ClaudeAgentAdapter(BaseAdapter):
         for spec in self.tools.specs():
             def make_handler(tool_name: str):
                 async def handler(args: dict[str, Any]) -> dict[str, Any]:
-                    result = self.call_tool(tool_name, args or {})
+                    result = await self.call_tool_async(tool_name, args or {})
                     return {"content": [{"type": "text", "text": self.tool_result_json(result)}]}
                 return handler
 

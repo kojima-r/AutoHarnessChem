@@ -2,9 +2,14 @@
 runtime:
   provider: deepagents        # deepagents | claude | openai
   model: default              # default = 各SDKの既定モデル
-  max_steps: 30
-  max_tool_calls: 20
+  max_steps: 60               # 1試行のターン数上限（複合タスクは 30 では足りない）
+  max_tool_calls: 40
   max_replans: 3
+  attempt_timeout_sec: 3600   # 1試行の実時間上限（最初の締切）
+  # 上限に達したときの扱い: ask=ユーザに確認して延長 / extend=自動延長 / stop=打ち切り
+  on_attempt_timeout: ask
+  timeout_extension_sec: 3600 # 1回の延長で足す秒数（ユーザ指定があればそれを優先）
+  max_timeout_extensions:     # 空 = 無制限（数日かかる計算を待てるようにする）
   sandbox:
     type: docker              # docker | local（docker が無ければ local へ自動フォールバック）
     image: autoharnesschem/sandbox:latest
@@ -18,6 +23,14 @@ runtime:
       # OptTDDFT (tools/OptTDDFT) = pyscf + rdkit + optuna
       opttddft:
         conda_env: pyscf
+        image: autoharnesschem/opttddft:latest
+      # RDKit / pandas / scikit-learn 系ツール（rdkit は pyscf 環境に同居）
+      rdkit:
+        conda_env: pyscf
+        image: autoharnesschem/opttddft:latest
+      # 構造最適化を伴う計算（scan_esipt_pes / use_geom_opt=true）= pyscf + geomeTRIC
+      esipt:
+        conda_env: pyscf_esipt
         image: autoharnesschem/opttddft:latest
       # ReactionT5 = torch + transformers
       reactiont5:

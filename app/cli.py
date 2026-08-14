@@ -1,6 +1,7 @@
 """CLI エントリポイント。
 
   ahc run "リクエスト" [--provider claude] [--input path/to.csv]
+          [--on-timeout ask|extend|stop] [--extend 7200]
   ahc skills list | compile [--provider all] | lock
   ahc benchmark [--provider deepagents --provider claude] [--tag smoke]
   ahc verify --workspace workspaces/run-xxxx --task-type orbital_calculation
@@ -44,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
                        help="期待する出力ファイル（複数可、glob可）")
     p_run.add_argument("--quiet", action="store_true",
                        help="実行過程（イベントの逐次表示）を抑制する")
+    p_run.add_argument("--on-timeout", dest="on_timeout",
+                       choices=["ask", "extend", "stop"],
+                       help="実時間上限に達したときの動作（既定は config の設定）。"
+                            "ask=延長するか対話で確認 / extend=自動延長 / stop=打ち切り")
+    p_run.add_argument("--extend", type=int, dest="extend_sec",
+                       help="1回の延長で足す秒数（既定は config の timeout_extension_sec）")
 
     p_skills = sub.add_parser("skills", help="Skill の一覧・配置・ロック")
     p_skills.add_argument("action", choices=["list", "compile", "lock", "check"])
@@ -83,6 +90,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if getattr(args, "on_timeout", None):
+        config.runtime.on_attempt_timeout = args.on_timeout
+    if getattr(args, "extend_sec", None):
+        config.runtime.timeout_extension_sec = args.extend_sec
 
     if args.command == "run":
         return _cmd_run(config, args)
@@ -132,7 +143,62 @@ def _run_task(controller, args):
         expected_outputs=args.expected or None,
         copy_inputs=args.inputs,
         on_event=None if args.quiet else make_event_printer(),
+        on_timeout=(make_timeout_prompt(controller.config)
+                    if controller.config.runtime.on_attempt_timeout == "ask" else None),
     ))
+
+
+def make_timeout_prompt(config):
+    """実時間上限に達したときに「さらに待つか」を端末で確認するリスナーを返す。
+
+    数日かかる計算もあるため、既定は「待つ」。応答が取れない環境（非対話）では
+    None を返して config の方針（extend / stop）に委ねる。
+    """
+    import os
+
+    if not (sys.stdin and sys.stdin.isatty()) or os.environ.get("AHC_NONINTERACTIVE"):
+        return None
+
+    default_sec = config.runtime.timeout_extension_sec
+
+    def ask(info: dict):
+        hours = info["waited_sec"] / 3600
+        print(f"\n[!] 試行 {info['attempt']} が {info['waited_sec']}s "
+              f"({hours:.1f} 時間) 経過しました（延長 {info['extensions']} 回）。"
+              f"\n    workspace: {info['workspace']}"
+              f"\n    さらに待ちますか？ [Enter=+{default_sec}s / 秒数 / "
+              f"h+時間 (例 12h) / d+日 (例 2d) / s=打ち切り]: ", end="", file=sys.stderr,
+              flush=True)
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("  → 打ち切ります", file=sys.stderr)
+            return False
+        if answer in ("s", "stop", "n", "no"):
+            print("  → 打ち切ります", file=sys.stderr)
+            return False
+        seconds = _parse_duration(answer, default_sec)
+        print(f"  → あと {seconds}s 待ちます", file=sys.stderr)
+        return seconds
+
+    return ask
+
+
+def _parse_duration(text: str, default_sec: int) -> int:
+    """'', '3600', '12h', '2d' を秒に変換する（解釈できなければ既定値）。"""
+    text = (text or "").strip().lower()
+    if not text:
+        return default_sec
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if text[-1] in units:
+        try:
+            return max(1, int(float(text[:-1]) * units[text[-1]]))
+        except ValueError:
+            return default_sec
+    try:
+        return max(1, int(float(text)))
+    except ValueError:
+        return default_sec
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +260,14 @@ def format_event(event) -> str:
         text = f"試行 {p.get('attempt')}/{p.get('max_attempts')}"
         if p.get("repairs"):
             text += f" （修復指示 {len(p['repairs'])} 件）"
+    elif p.get("phase") == "attempt_timeout_pending":
+        text = (f"⏳ 試行 {p.get('attempt')} が {p.get('waited_sec')}s 経過 — "
+                "さらに待つか確認します")
+    elif p.get("phase") == "attempt_timeout_extended":
+        text = (f"延長 +{p.get('extend_sec')}s（累計 {p.get('new_deadline_sec')}s、"
+                f"{p.get('extensions', 0) + 1} 回目）")
+    elif p.get("phase") == "attempt_timeout_limit":
+        text = (f"延長回数の上限 {p.get('max_timeout_extensions')} に達したため打ち切ります")
     elif p.get("phase") == "verifying":
         text = f"Verifier 検査中 (attempt {p.get('attempt')})"
     elif p.get("phase") == "finished":

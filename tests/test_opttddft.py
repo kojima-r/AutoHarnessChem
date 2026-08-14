@@ -279,7 +279,8 @@ def test_with_limits_scales_cpu_limit_by_threads(tmp_path):
     sandbox = StubSandbox(tmp_path)
     tightened = with_limits(sandbox, timeout_sec=1200, threads=4, memory_limit_mb=8192)
     assert tightened.config.timeout_sec == 1200
-    assert tightened.config.cpu_limit_sec == 4800      # 全スレッド分の CPU 時間
+    # 全スレッド分 + 1 スレッド分の余裕（実時間の timeout を先に効かせる）
+    assert tightened.config.cpu_limit_sec == 1200 * 5
     assert tightened.config.memory_limit_mb == 8192
     assert sandbox.config.timeout_sec == 600           # 元の sandbox は変えない
     assert with_limits(sandbox) is sandbox

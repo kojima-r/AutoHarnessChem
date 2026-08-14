@@ -9,6 +9,7 @@ SDK ごとに違うのは「エージェントの動かし方」だけで、Skil
 - [コンセプト](#コンセプト)
 - [アーキテクチャ](#アーキテクチャ)
 - [動作の仕組み（自律実行ループ）](#動作の仕組み自律実行ループ)
+- [複合タスク（複数の側面を含む要求）](#複合タスク複数の側面を含む要求)
 - [セットアップ](#セットアップ)
 - [使い方（CLI）](#使い方cli)
 - [Web インターフェース](#web-インターフェース)
@@ -89,11 +90,53 @@ Sandbox / Python Executor tools/sandbox.py（Docker / local conda、ツール専
 2. **Skill 選択** — `task_type` に対応する Skill に加え、常時ロードの検証・回復・報告 Skill を選ぶ。
 3. **Adapter 起動** — routing 設定（またはフォールバック）で provider を決めて起動。
 4. **実行** — エージェントが共通ツール（`calculate_orbitals` 等）や `run_python_sandbox` を使ってタスクを遂行。
-5. **検証** — `ScientificVerifier` が構造化判定（期待出力の存在 + ドメイン検査: HOMO<LUMO、値域、リーク疑い等）。
+5. **検証** — `ScientificVerifier` が構造化判定（期待出力の存在 + ドメイン検査: HOMO<LUMO、値域、リーク疑い等）。複合タスクでは検出した全側面の検査を行う。
 6. **修復ループ** — 不合格なら `required_repairs`（不足・警告の具体的な直し方）を次の試行プロンプトに注入して再実行。`max_replans` 回まで。
-7. **保存** — 合格したら `workspaces/<run_id>/` に `report.json` / `report.md` / `manifest.json` を保存。
+7. **保存** — `workspaces/<run_id>/` に `report.json` / `report.md` / `manifest.json` を保存（**合否・例外・打ち切りに関わらず必ず保存**）。
+
+> 1 試行には実時間の上限（`attempt_timeout_sec`、既定 3600s）があります。上限に達すると **`on_attempt_timeout` に従って「さらに待つか」を確認**します（既定 `ask`）。延長した場合はエージェントの作業を止めずに待ち続け（**計算はやり直しません**）、打ち切った場合はその時点の成果物を検証・報告し、次の試行には「分割して部分結果を保存せよ」という修復指示を渡します。重い計算やエージェントの待機ループで run が終わらなくなることはありません。
+
+### 長時間実行（数時間〜数日）
+
+| 方法 | 動作 |
+|---|---|
+| `ahc run "..."`（対話端末） | 上限ごとに `さらに待ちますか？ [Enter=+3600s / 秒数 / 12h / 2d / s=打ち切り]` と聞かれる |
+| Web UI | ラン詳細に「⏳ 実行時間の上限に達しました」カードが出て、**+1時間 / +6時間 / +1日 / +3日 / 秒数指定 / 打ち切り**を選べる（`POST /api/runs/{id}/timeout`） |
+| 無人実行 | `on_attempt_timeout: extend`（確認せず自動延長）。`max_timeout_extensions` で回数を制限でき、空なら無制限 |
+| 打ち切り運用 | `on_attempt_timeout: stop`（従来動作。ベンチマーク等の有界実行向け） |
+
+```bash
+ahc run "..." --on-timeout extend --extend 21600   # 6時間ずつ自動延長（無人で数日待つ）
+ahc run "..." --on-timeout ask                     # 上限ごとに確認（既定）
+```
+
+延長の回数と合計秒数は trace（`attempt_timeout_pending` / `attempt_timeout_extended`）と
+`report.json`（`timeout_extensions` / `extended_sec`）に記録されます。
+ツール実行は別スレッドで回すため（`BaseAdapter.call_tool_async`）、**数分〜数時間かかる
+計算の最中でも上限のチェックと確認が時間通り**に行われます。
+`on_attempt_timeout: ask` でも確認手段が無い場合（非対話 CLI など）は、run が
+終わらなくならないよう警告を残して打ち切ります。
 
 > 終了条件は「特定の文字列が出たら終わり」ではなく、`VerificationResult`（passed / missing / warnings / repairs）による**構造化判定**です。これにより SDK に依存しない一貫した合否基準が得られます。
+
+---
+
+## 複合タスク（複数の側面を含む要求）
+
+「骨格をベースに紫外域に吸収を持ち、**合成可能（経路を出力）**な化合物を探す」のように、
+1 つの要求が設計・計算・逆合成・報告にまたがることがあります。この場合 `interpret_task` は
+**すべての側面を検出**し、最初を `task_type`（primary）、残りを `secondary_task_types` として扱います。
+
+| 効果 | 内容 |
+|---|---|
+| Skill | primary + secondary に対応する Skill を**すべてロード**（例: `tddft-molecular-design` と `aizynth-retrosynthesis` の両方） |
+| 達成条件 | primary の成果物 + `report_user.md` / `report_user.html` を必須にし、他の側面は「報告で言及すること」として提示（誤検出で詰まないように必須要件は増やさない） |
+| 検証 | primary + secondary のドメイン検査を実行（対象ファイルが無い検査は何もしない） |
+| 進め方 | 常時ロードの `complex-task-planning` Skill が、分解 → 安い順に実行 → 1 ステップごとに成果物を残す → 部分結果でも報告、という手順を指示 |
+
+重いツール（TDDFT・Optuna 探索・PES スキャン・多分子の逆合成）は**1 件ごとに CSV と途中結果を保存**します。
+実時間上限で打ち切られても完了分は成果物として残り、ツールは `status="partial"` +
+`data.pending`（未処理の入力）を返すので、エージェントは残りだけを分割して呼び直せます。
 
 ---
 
@@ -124,11 +167,16 @@ docker build -t autoharnesschem/aizynth:latest -f docker/Dockerfile.aizynth dock
 harness 本体のプロセスに重い依存は不要です。ツールごとに以下の環境が使われます。
 
 ```bash
-# 1. 量子化学（calculate_orbitals / calculate_tddft_spectrum /
-#              optimize_absorption_wavelength / scan_esipt_pes）
+# 1. 量子化学 + RDKit/pandas/sklearn 系（calculate_orbitals / calculate_tddft_spectrum /
+#    optimize_absorption_wavelength / standardize_smiles / cross_validate_model ...）
 conda create -n pyscf python=3.12 && conda activate pyscf
-pip install -e tools/OptTDDFT          # opt_tddft（pyscf 2.11 / numpy 1.26.4 / rdkit / optuna）
-pip install geometric                  # 構造最適化・ESIPT スキャンを使う場合（任意）
+pip install -e tools/OptTDDFT          # opt_tddft（pyscf / numpy 1.26.4 / rdkit / optuna）
+pip install scikit-learn               # cross_validate_model 用
+
+# 1b. 構造最適化を伴う計算（scan_esipt_pes / use_geom_opt=true）
+#     geomeTRIC を別環境に置き、既定環境の numpy ピンを崩さないようにする
+conda create -n pyscf_esipt python=3.12 && conda activate pyscf_esipt
+pip install pyscf geometric rdkit matplotlib
 
 # 2. 反応予測（predict_reaction_t5）
 conda create -n reactiont5 python=3.11 && conda activate reactiont5
@@ -276,12 +324,12 @@ CC(=O)OC(C)=O.Nc1ccc(O)cc1>>CC(=O)Nc1ccc(O)cc1   アセチル化（`>` を含め
 
 | ツール | 役割 |
 |---|---|
-| `inspect_dataset` | CSV の行数・列型・欠損・統計量の確認 |
-| `standardize_smiles` | RDKit による SMILES 正準化 |
-| `generate_3d_structure` | ETKDGv3 + MMFF で 3D 構造生成（xyz 出力） |
+| `inspect_dataset` | CSV の行数・列型・欠損・統計量の確認（専用環境） |
+| `standardize_smiles` | RDKit による SMILES 正準化（専用環境） |
+| `generate_3d_structure` | ETKDGv3 + MMFF で 3D 構造生成（xyz 出力、専用環境） |
 | `calculate_orbitals` | **OptTDDFT(PySCF)** で HOMO/LUMO/gap・全エネルギーを計算（SCF のみ） |
 | `calculate_tddft_spectrum` | **OptTDDFT** の TDDFT で励起波長・振動子強度・UV-Vis スペクトル画像 |
-| `optimize_absorption_wavelength` | **OptTDDFT + Optuna** で目標吸収波長に近い分子を探索（MI） |
+| `optimize_absorption_wavelength` | **OptTDDFT + Optuna** で目標吸収波長に近い分子を探索（MI。既定は**振動子強度が最大の吸収帯**を目標に合わせる） |
 | `scan_esipt_pes` | **OptTDDFT** の ESIPT Relaxed PES スキャン（S0/S1 曲面 + 障壁） |
 | `calculate_rdkit_descriptors` | RDKit 記述子（MolWt, LogP, TPSA 等） |
 | `cross_validate_model` | 特徴量から target を予測する回帰モデルの K-fold CV + 散布図 |
@@ -308,9 +356,20 @@ PCM 溶媒・Optuna 探索・レポート生成をそのまま再利用します
 - 各ツールは `timeout_sec` を個別に指定できます（既定は sandbox の `timeout_sec`）。
   TDDFT や Optuna 探索は既定の 600s では終わらないことが多いため、ここを上げて使います。
 - `threads`（既定 4）で PySCF のスレッド数を制限します（全コア占有の防止）。
-- 構造最適化（`use_geom_opt=true` / `scan_esipt_pes`）には **geomeTRIC** が必要です。
-  `pyscf` 環境に無い場合は `error_type=missing_dependency` として報告されます
-  （`conda run -n pyscf pip install geometric`。numpy は 1.26.4 に固定したまま入れること）。
+- `memory_limit_mb`（既定 16384）でメモリ上限を指定します。**sandbox 既定の 4096MB では
+  実用的な TDDFT（例 CAM-B3LYP/6-31G(d) のクマリン）がアドレス空間不足で SIGSEGV になります**
+  — この場合ツールは `error_type=out_of_memory` として上限を上げる案内を返します。
+- 重いツールは**1 件ごとに CSV と途中結果を保存**し、打ち切られても完了分を
+  `status="partial"` + `data.pending`（未処理の入力）として返します。
+- 同じ CSV を指定して**複数回呼ぶと結果は累積**されます（同じ `(smiles, method, basis)`
+  の行だけ置換）。「重い計算は 1 分子ずつ呼ぶ」運用で前の分子が消えません。
+- 分子設計の目的関数は既定で**振動子強度が最大の吸収帯**（実測される帯）を目標に
+  合わせます。`objective="longest"` で最長波長にもできますが、クマリン類では S1 が
+  振動子強度 ≈ 0 の暗状態（n→π\*）になり、実測されない帯を追うことになります。
+- 構造最適化（`use_geom_opt=true` / `scan_esipt_pes`）は **geomeTRIC を持つ別環境**
+  （`named_envs.esipt`、既定 conda env `pyscf_esipt`）へ自動的に振り分けられます。
+  既定環境の numpy ピンを崩さずに geomeTRIC を使えるようにするためで、
+  環境が無い場合は `error_type=missing_dependency` として報告されます。
 
 ### 逆合成: 1 段階予測と経路探索の使い分け
 
@@ -336,7 +395,7 @@ Skill は SDK 非依存の「手順書」です。正本は `skills/`（Agent Sk
 
 各 `SKILL.md` は **Procedure（手順）/ Completion criteria（完了条件）/ Recovery procedure（回復手順）** を持ちます。同梱の Skill:
 
-`dataset-inspection` · `rdkit-preparation` · `pyscf-orbitals`（HOMO/LUMO + TDDFT）· `tddft-molecular-design`（Optuna 探索）· `esipt-pes-scan` · `molecular-regression` · `reaction-prediction` · `aizynth-retrosynthesis` · `scientific-verification`（常時）· `execution-recovery`（常時）· `result-reporting`（常時）
+`dataset-inspection` · `rdkit-preparation` · `pyscf-orbitals`（HOMO/LUMO + TDDFT）· `tddft-molecular-design`（Optuna 探索）· `esipt-pes-scan` · `molecular-regression` · `reaction-prediction` · `aizynth-retrosynthesis` · `complex-task-planning`（常時）· `scientific-verification`（常時）· `execution-recovery`（常時）· `result-reporting`（常時）
 
 ---
 
@@ -347,6 +406,8 @@ Skill は SDK 非依存の「手順書」です。正本は `skills/`（Agent Sk
 | ツール | local sandbox | docker sandbox |
 |---|---|---|
 | `run_python_sandbox` ほか既定 | conda env `pyscf` | `autoharnesschem/sandbox` |
+| `standardize_smiles` / `generate_3d_structure` / `calculate_rdkit_descriptors` / `inspect_dataset` / `cross_validate_model` | conda env `pyscf`（RDKit・pandas・scikit-learn） | `autoharnesschem/opttddft` |
+| `scan_esipt_pes`、および `use_geom_opt=true` の呼び出し | conda env `pyscf_esipt`（**geomeTRIC** 入り） | `autoharnesschem/opttddft` |
 | `calculate_orbitals` / `calculate_tddft_spectrum` / `optimize_absorption_wavelength` / `scan_esipt_pes` | conda env `pyscf`（`opt_tddft`） | `autoharnesschem/opttddft`（OptTDDFT 同梱） |
 | `predict_reaction_t5` | conda env `reactiont5` | `autoharnesschem/reactiont5`（モデル焼き込み済み） |
 | `plan_retrosynthesis` | conda env `aizynth` | `autoharnesschem/aizynth`（policy/stock 焼き込み済み） |
@@ -354,6 +415,8 @@ Skill は SDK 非依存の「手順書」です。正本は `skills/`（Agent Sk
 harness 本体のプロセスに pyscf も torch も aizynthfinder も不要です。ツールは自己完結スクリプトを生成し（`tools/envrun.py` が共通化）、専用環境の subprocess として実行して、結果を JSON/CSV で受け取ります。実行上限（timeout / CPU / メモリ）は呼び出しごとに差し替えられ、`SIGKILL` は `out_of_memory` として分類されます。分離したい他ツールも `sandbox.named_envs` にエントリを追加するだけで同様に扱えます。
 
 > docker sandbox は `network=none` で動くため、モデルは image に焼き込みます（実行時ダウンロード不可）。AiZynthFinder の config は image 内の `AIZYNTH_CONFIG` が使われます。
+
+> **フォールバック条件** — `sandbox.type: docker` でも、docker が無い・**image が未ビルド**・daemon が停止/権限不足のいずれかなら、起動時に検知して conda 環境（`named_envs` の `conda_env`）での実行へ自動フォールバックします。実行時に docker 側で失敗した場合も `error_type=missing_environment` として「image をビルドするか `sandbox.type: local` にする」旨を返します。
 
 ---
 
@@ -412,7 +475,12 @@ proposer は2段階で提案します:
 | キー | 意味 |
 |---|---|
 | `runtime.provider` | 既定 provider（`deepagents` / `claude` / `openai`） |
+| `runtime.max_steps` | 1試行のターン数上限（複合タスクは 60 程度必要） |
 | `runtime.max_replans` | 検証不合格時の再実行回数の上限 |
+| `runtime.attempt_timeout_sec` | **1試行の実時間上限**（最初の締切） |
+| `runtime.on_attempt_timeout` | 上限到達時の動作（`ask` = ユーザに確認して延長 / `extend` = 自動延長 / `stop` = 打ち切り） |
+| `runtime.timeout_extension_sec` | 1回の延長で足す秒数（既定 3600） |
+| `runtime.max_timeout_extensions` | 延長回数の上限（空 = 無制限） |
 | `runtime.sandbox` | `type`(docker/local)・`conda_env`・timeout・リソース制限・`named_envs` |
 | `routing` | `task_type` → provider の対応（ベンチマーク実測から更新可能）+ `fallback` |
 | `mode` | `development` / `production`（本番は自己改善を強制無効化） |
@@ -433,7 +501,8 @@ AutoHernessChem/
 ├── schemas/        TaskSpec / ToolResult / VerificationResult / AgentEvent など
 ├── harness/        Common Harness Core（controller, verifier, policy, ...）
 ├── tools/          共通ツール + registry + sandbox
-│   ├── chem.py       RDKit / pandas / sklearn 系ツール
+│   ├── chem.py       追加依存の無いツール（artifact 確認・sandbox 実行・検証・検索）
+│   ├── chemenv.py    RDKit / pandas / scikit-learn 系（専用環境で実行）
 │   ├── report.py     Markdown → 構造式付き HTML レポート
 │   ├── opttddft.py   OptTDDFT を pyscf 環境で実行する量子化学ツール
 │   ├── reactiont5.py ReactionT5v2（reactiont5 環境）

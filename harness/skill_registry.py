@@ -20,7 +20,8 @@ from pydantic import BaseModel, Field
 from schemas import TaskSpec
 
 # タスクに関係なく常にロードする横断的 Skill
-ALWAYS_ON_SKILLS = ["scientific-verification", "execution-recovery", "result-reporting"]
+ALWAYS_ON_SKILLS = ["complex-task-planning", "scientific-verification",
+                    "execution-recovery", "result-reporting"]
 
 
 class Skill(BaseModel):
@@ -66,13 +67,19 @@ class SkillRegistry:
         return sorted(self.skills)
 
     def select(self, task: TaskSpec) -> list[Skill]:
-        """task_type と明示指定から使用 Skill を決める。横断 Skill は常に含める。"""
+        """task_type と明示指定から使用 Skill を決める。横断 Skill は常に含める。
+
+        複合タスクでは secondary_task_types の Skill も読み込む（例「吸収波長で
+        分子を探索し、合成経路も出す」なら tddft-molecular-design と
+        aizynth-retrosynthesis の両方が必要）。
+        """
         selected: dict[str, Skill] = {}
         for name in task.required_skills:
             if name in self.skills:
                 selected[name] = self.skills[name]
+        wanted = {task.task_type, *task.secondary_task_types}
         for skill in self.skills.values():
-            if task.task_type in skill.task_types:
+            if wanted & set(skill.task_types):
                 selected[skill.name] = skill
         for name in ALWAYS_ON_SKILLS:
             if name in self.skills:

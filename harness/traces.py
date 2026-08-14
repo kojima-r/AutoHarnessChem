@@ -6,6 +6,7 @@ Evolver はこの jsonl を横断的に解析する。
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +19,8 @@ class TraceWriter:
         self.path = Path(traces_dir) / f"{run_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._listeners: list[Callable[[AgentEvent], None]] = []
+        # ツール実行を別スレッドで回すため、追記とリスナー通知を直列化する
+        self._lock = threading.Lock()
 
     def subscribe(self, listener: Callable[[AgentEvent], None]) -> None:
         """イベント発生ごとに呼ばれるリスナーを登録する（CLIの逐次表示等）。"""
@@ -30,13 +33,14 @@ class TraceWriter:
             actor=actor,
             payload=payload or {},
         )
-        with self.path.open("a", encoding="utf-8") as fp:
-            fp.write(event.model_dump_json() + "\n")
-        for listener in self._listeners:
-            try:
-                listener(event)
-            except Exception:
-                pass  # 表示系の失敗で run を止めない
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as fp:
+                fp.write(event.model_dump_json() + "\n")
+            for listener in self._listeners:
+                try:
+                    listener(event)
+                except Exception:
+                    pass  # 表示系の失敗で run を止めない
         return event
 
 

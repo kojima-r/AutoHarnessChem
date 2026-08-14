@@ -4,6 +4,7 @@
 - GET  /api/runs            ラン一覧（実行中 + workspaces/ の履歴）
 - GET  /api/runs/{id}       ラン詳細（report / ledger / manifest / report.md）
 - GET  /api/runs/{id}/trace 正規化イベントの増分取得（?after=N）
+- POST /api/runs/{id}/timeout 実時間上限に達した run を延長 / 打ち切り
 - GET  /api/runs/{id}/artifacts/{path}  成果物ファイル配信（画像・HTML報告等）
 - POST /api/uploads         入力ファイルのアップロード（python-multipart 必要）
 - GET  /api/skills, /api/providers
@@ -33,10 +34,32 @@ def create_app(config: HarnessConfig):
     from harness.skill_registry import SkillRegistry
     from schemas import new_id
 
-    app = FastAPI(title="AutoHarnessChem", version="0.2.0")
+    app = FastAPI(title="AutoHarnessChem", version="0.3.0")
     controller = HarnessController(config)
-    # run_id -> {"status": running|succeeded|failed|error, "error": str|None}
+    # run_id -> {"status": running|awaiting_decision|succeeded|failed|error, ...}
     active: dict[str, dict[str, Any]] = {}
+    # 実時間上限に達して「さらに待つか」の判断を待っている run
+    pending_timeouts: dict[str, dict[str, Any]] = {}
+
+    def timeout_asker(run_id: str):
+        """上限到達時に判断を待つ callable（/api/runs/{id}/timeout で解決される）。"""
+        async def ask(info: dict):
+            loop = asyncio.get_running_loop()
+            decision: asyncio.Future = loop.create_future()
+            pending_timeouts[run_id] = {"info": info, "future": decision,
+                                        "asked_at": info.get("waited_sec")}
+            previous = active.get(run_id, {})
+            active[run_id] = {**previous, "status": "awaiting_decision",
+                              "timeout_info": info}
+            try:
+                answer = await decision          # 応答があるまで待ち続ける
+            finally:
+                pending_timeouts.pop(run_id, None)
+                active[run_id] = {**active.get(run_id, {}), "status": "running",
+                                  "timeout_info": None}
+            return answer
+
+        return ask
 
     class TaskRequest(BaseModel):
         request: str
@@ -56,10 +79,17 @@ def create_app(config: HarnessConfig):
                 expected_outputs=body.expected_outputs or None,
                 copy_inputs=body.input_paths,
                 run_id=run_id,
+                # 上限に達したらブラウザ側へ確認を出す（数日待つ運用に対応）
+                on_timeout=(timeout_asker(run_id)
+                            if config.runtime.on_attempt_timeout == "ask" else None),
             )
-            active[run_id] = {"status": "succeeded" if report.passed else "failed"}
+            active[run_id] = {"status": "succeeded" if report.passed else "failed",
+                              "timeout_extensions": report.timeout_extensions,
+                              "extended_sec": report.extended_sec}
         except Exception as e:
             active[run_id] = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+        finally:
+            pending_timeouts.pop(run_id, None)
 
     @app.post("/api/tasks")
     async def submit_task(body: TaskRequest):
@@ -135,6 +165,28 @@ def create_app(config: HarnessConfig):
         if report_md.exists():
             detail["report_md"] = report_md.read_text(encoding="utf-8")
         return detail
+
+    class TimeoutDecisionRequest(BaseModel):
+        extend_sec: int | None = None      # 未指定なら config の既定幅で延長
+        stop: bool = False                 # true なら打ち切って検証・報告へ進む
+
+    @app.post("/api/runs/{run_id}/timeout")
+    def resolve_timeout(run_id: str, body: TimeoutDecisionRequest):
+        """実時間上限に達した run を延長する / 打ち切る。"""
+        pending = pending_timeouts.get(run_id)
+        if pending is None:
+            raise HTTPException(404, f"run {run_id} は判断待ちではありません")
+        future = pending["future"]
+        if future.done():
+            raise HTTPException(409, "既に判断済みです")
+        if body.stop:
+            future.set_result(False)
+            return {"run_id": run_id, "decision": "stop"}
+        seconds = body.extend_sec or config.runtime.timeout_extension_sec
+        if seconds <= 0:
+            raise HTTPException(400, "extend_sec は 1 以上にしてください")
+        future.set_result(int(seconds))
+        return {"run_id": run_id, "decision": "extend", "extend_sec": int(seconds)}
 
     @app.get("/api/runs/{run_id}/trace")
     def get_trace(run_id: str, after: int = 0):

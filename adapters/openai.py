@@ -32,7 +32,7 @@ class OpenAIAgentsAdapter(BaseAdapter):
             def make_invoke(tool_name: str):
                 async def on_invoke_tool(ctx, args_json: str) -> str:
                     arguments = json.loads(args_json) if args_json else {}
-                    result = self.call_tool(tool_name, arguments)
+                    result = await self.call_tool_async(tool_name, arguments)
                     return self.tool_result_json(result)
                 return on_invoke_tool
 

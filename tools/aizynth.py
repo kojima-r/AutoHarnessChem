@@ -131,6 +131,46 @@ def route_score(route):
     return float(numeric[0]) if numeric else None
 
 
+import csv
+
+
+def write_outputs(entries):
+    """1 分子終わるたびに JSON/CSV と途中結果を書く（打ち切られても残る）。"""
+    payload = {
+        "targets": entries,
+        "selection": selection,
+        "search": config["search"],
+        "n_solved": sum(1 for t in entries if t["solved"]),
+        "n_requested": len(spec["targets"]),
+    }
+    Path(spec["output_json"]).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    with open(spec["output_csv"], "w", newline="", encoding="utf-8") as fp:
+        writer = csv.DictWriter(fp, fieldnames=[
+            "target_smiles", "route_rank", "solved", "n_steps", "n_precursors",
+            "score", "precursors", "search_time_s"])
+        writer.writeheader()
+        for entry in entries:
+            if not entry["routes"]:
+                writer.writerow({"target_smiles": entry["target"], "route_rank": 0,
+                                 "solved": False, "n_steps": 0, "n_precursors": 0,
+                                 "score": None, "precursors": "",
+                                 "search_time_s": round(entry["search_time_s"], 2)})
+                continue
+            for route in entry["routes"]:
+                writer.writerow({
+                    "target_smiles": entry["target"],
+                    "route_rank": route["rank"],
+                    "solved": route["solved"],
+                    "n_steps": route["n_steps"],
+                    "n_precursors": route["n_precursors"],
+                    "score": route["score"],
+                    "precursors": ".".join(route["precursors"]),
+                    "search_time_s": round(entry["search_time_s"], 2),
+                })
+    return payload
+
+
 targets_out = []
 for index, target in enumerate(spec["targets"]):
     finder.target_smiles = target
@@ -176,49 +216,25 @@ for index, target in enumerate(spec["targets"]):
     print("[aizynth] target %d: solved=%s routes=%d time=%.1fs"
           % (index, solved, len(routes), elapsed))
 
-payload = {
-    "targets": targets_out,
-    "selection": selection,
-    "search": config["search"],
-    "n_solved": sum(1 for t in targets_out if t["solved"]),
-}
+    # 経路 JSON / CSV を都度更新し、途中結果も回収できるようにする
+    payload = write_outputs(targets_out)
+    partial = dict(payload)
+    partial["partial"] = True
+    tmp = Path("__PARTIAL_JSON__.tmp")
+    tmp.write_text(json.dumps(partial, ensure_ascii=False, default=str),
+                   encoding="utf-8")
+    tmp.replace(Path("__PARTIAL_JSON__"))
+
+payload = write_outputs(targets_out)
 Path("__OUTPUT_JSON__").write_text(json.dumps(payload, ensure_ascii=False, default=str),
                                   encoding="utf-8")
-Path(spec["output_json"]).write_text(
-    json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-
-# 経路サマリ CSV（tree を除いた 1 経路 1 行）
-import csv
-
-with open(spec["output_csv"], "w", newline="", encoding="utf-8") as fp:
-    writer = csv.DictWriter(fp, fieldnames=[
-        "target_smiles", "route_rank", "solved", "n_steps", "n_precursors",
-        "score", "precursors", "search_time_s"])
-    writer.writeheader()
-    for entry in targets_out:
-        if not entry["routes"]:
-            writer.writerow({"target_smiles": entry["target"], "route_rank": 0,
-                             "solved": False, "n_steps": 0, "n_precursors": 0,
-                             "score": None, "precursors": "",
-                             "search_time_s": round(entry["search_time_s"], 2)})
-            continue
-        for route in entry["routes"]:
-            writer.writerow({
-                "target_smiles": entry["target"],
-                "route_rank": route["rank"],
-                "solved": route["solved"],
-                "n_steps": route["n_steps"],
-                "n_precursors": route["n_precursors"],
-                "score": route["score"],
-                "precursors": ".".join(route["precursors"]),
-                "search_time_s": round(entry["search_time_s"], 2),
-            })
 print("[aizynth] solved %d/%d targets" % (payload["n_solved"], len(targets_out)))
 '''
 
 SCRIPT = EnvScript(body=_SCRIPT_BODY, script_name="_aizynth_script.py",
                    input_json="_aizynth_input.json",
-                   output_json="_aizynth_output.json")
+                   output_json="_aizynth_output.json",
+                   partial_json="_aizynth_partial.json")
 
 
 def resolve_config(workspace: Path, config_yaml: str | None = None) -> Path | None:
@@ -338,24 +354,34 @@ def plan_retrosynthesis(
                           data={"stdout": run.stdout[-2000:]},
                           retryable=True, error_type="runtime_error")
 
+    searched = {entry["target"] for entry in entries}
+    pending = [t for t in targets if t not in searched]
     n_with_routes = sum(1 for entry in entries if entry["n_routes"])
-    if n_solved == len(entries):
+    if n_solved == len(targets):
         status = "success"
     elif n_with_routes:
-        # 経路は得られたが stock まで到達していない target がある（探索予算不足の可能性）
+        # 経路は得られたが stock まで到達していない / 未探索の target がある
         status = "partial"
     else:
         status = "failed"
+
+    summary = (f"AiZynthFinder ({algorithm}): {n_solved}/{len(targets)} 分子で "
+               f"stock まで到達する経路を発見 → {output_json} / {output_csv}")
+    if run.partial:
+        listed = ", ".join(pending[:3]) + ("…" if len(pending) > 3 else "")
+        summary += (f" ※途中で打ち切られました（{run.interrupted_reason}）"
+                    f"。未探索 {len(pending)} 件（{listed}）は分けて呼び直してください")
     return ToolResult(
         status=status,
-        summary=(f"AiZynthFinder ({algorithm}): {n_solved}/{len(entries)} 分子で "
-                 f"stock まで到達する経路を発見 → {output_json} / {output_csv}"),
-        data={"n_solved": n_solved, "n_targets": len(entries), "targets": digest,
+        summary=summary,
+        data={"n_solved": n_solved, "n_targets": len(entries),
+              "n_requested": len(targets), "targets": digest, "pending": pending,
               "selection": payload.get("selection", {}),
-              "search": payload.get("search", {}),
+              "search": payload.get("search", {}), "interrupted": run.partial,
               "output_json": str(json_path), "output_csv": str(csv_path),
               "config_yaml": str(config_path) if config_path else "(実行環境の AIZYNTH_CONFIG)"},
         artifacts=[artifact(p) for p in (json_path, csv_path) if p.exists()],
         retryable=status != "success",
-        error_type=None if n_solved == len(entries) else "no_route_found",
+        error_type=("timeout" if run.partial
+                    else (None if n_solved == len(targets) else "no_route_found")),
     )

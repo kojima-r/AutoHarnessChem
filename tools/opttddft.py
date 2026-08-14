@@ -17,6 +17,7 @@ OptunaOptimizer・可視化/レポート）を再利用し、charge/spin の明�
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from schemas import ToolResult
@@ -25,11 +26,16 @@ from tools.envrun import EnvScript, artifact, run_env_script
 # tools/OptTDDFT — editable install が無い環境でも import できるよう sys.path へ渡す
 OPT_TDDFT_ROOT = Path(__file__).resolve().parent / "OptTDDFT"
 
-# geomeTRIC は構造最適化（use_geom_opt / ESIPT の拘束付き最適化）でのみ必要
+# 量子化学計算の既定メモリ上限（MB）。sandbox 既定の 4096 では、実用的な TDDFT
+# （例 CAM-B3LYP/6-31G(d) のクマリン）がアドレス空間不足で SIGSEGV になる
+DEFAULT_MEMORY_LIMIT_MB = 16384
+
+# geomeTRIC は構造最適化（use_geom_opt / ESIPT の拘束付き最適化）でのみ必要。
+# 該当する呼び出しは named_envs["esipt"]（既定 conda env pyscf_esipt）で実行される
 _GEOMETRIC_FAILURE = (
     r"No module named 'geometric'", "missing_dependency", False,
-    "構造最適化には geomeTRIC が必要です（`conda run -n pyscf pip install geometric`。"
-    "numpy を 1.26.4 に固定したまま入れること）。agent 側では修復不能で、"
+    "構造最適化には geomeTRIC が必要です。専用環境 `{env}` に入れてください "
+    "(`conda run -n {env} pip install geometric`)。agent 側では修復不能で、"
     "scan_esipt_pes では必須、calculate_orbitals / calculate_tddft_spectrum では "
     "use_geom_opt=false にすれば回避できます。",
 )
@@ -179,9 +185,55 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
+def merge_csv(path, rows, key_fields=("smiles",)):
+    """既存 CSV と結合して書き出す（同じキーの行は今回の結果で置き換える）。
+
+    重い計算は 1 分子ずつ呼ぶことを推奨しているため、同じ output_csv を指定した
+    複数回の呼び出しで前の分子の結果が消えないようにする。列が異なる場合は
+    和集合を取り、欠けているセルは空にする。
+    """
+    if not rows:
+        return 0
+    existing = []
+    target = Path(path)
+    if target.exists():
+        try:
+            with target.open(encoding="utf-8", newline="") as fp:
+                existing = list(csv.DictReader(fp))
+        except (OSError, csv.Error, UnicodeDecodeError):
+            existing = []
+
+    def key_of(row):
+        return tuple(str(row.get(k, "")) for k in key_fields)
+
+    incoming = {key_of(r) for r in rows}
+    merged = [r for r in existing if key_of(r) not in incoming] + list(rows)
+    fieldnames = []
+    for row in merged:
+        for column in row:
+            if column not in fieldnames:
+                fieldnames.append(column)
+    with target.open("w", newline="", encoding="utf-8") as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in merged:
+            writer.writerow({c: row.get(c, "") for c in fieldnames})
+    return len(merged)
+
+
 def finish(payload):
     Path("__OUTPUT_JSON__").write_text(
         json.dumps(payload, ensure_ascii=False, default=float), encoding="utf-8")
+
+
+def checkpoint(payload):
+    """1 件終わるたびに途中結果を書く。タイムアウトで打ち切られても回収できる。"""
+    payload = dict(payload)
+    payload["partial"] = True
+    tmp = Path("__PARTIAL_JSON__.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, default=float),
+                   encoding="utf-8")
+    tmp.replace(Path("__PARTIAL_JSON__"))   # 読み取り側が壊れた JSON を見ないように
 '''
 
 _ORBITALS_BODY = r'''
@@ -216,10 +268,19 @@ for smiles in spec["smiles"]:
     except Exception as e:
         failures.append({"smiles": smiles, "error": "%s: %s" % (type(e).__name__, e)})
         print("[orbitals] %s FAILED: %s" % (smiles, e))
+    # 1 分子ごとに CSV と途中結果を更新する（打ち切られても完了分は残る）。
+    # 既存の CSV は同じ (smiles, method, basis) の行だけ置き換える
+    n_total = merge_csv(spec["output_csv"], rows, ("smiles", "method", "basis"))
+    checkpoint({"results": rows, "failures": failures,
+                "output_csv": spec["output_csv"] if rows else None,
+                "n_rows_in_csv": n_total,
+                "n_requested": len(spec["smiles"])})
 
-write_csv(spec["output_csv"], rows)
+n_total = merge_csv(spec["output_csv"], rows, ("smiles", "method", "basis"))
 finish({"results": rows, "failures": failures,
-        "output_csv": spec["output_csv"] if rows else None})
+        "output_csv": spec["output_csv"] if rows else None,
+        "n_rows_in_csv": n_total,
+        "n_requested": len(spec["smiles"])})
 '''
 
 _SPECTRUM_BODY = r'''
@@ -280,28 +341,98 @@ for smiles in spec["smiles"]:
                                          stdev=spec["plot_stdev"])
         images.append(image)
 
-write_csv(spec["output_csv"], state_rows)
-write_csv(spec["orbital_csv"], orbital_rows)
+    # TDDFT は 1 分子でも数分かかる。分子ごとに CSV と途中結果を更新して、
+    # タイムアウトしても完了分を返せるようにする（既存 CSV は同じ分子の行だけ置換）
+    merge_csv(spec["output_csv"], state_rows,
+              ("smiles", "state_index", "functional", "basis"))
+    n_total = merge_csv(spec["orbital_csv"], orbital_rows,
+                        ("smiles", "method", "basis"))
+    checkpoint({"states": state_rows, "molecules": orbital_rows,
+                "failures": failures, "images": images,
+                "n_rows_in_orbital_csv": n_total,
+                "n_requested": len(spec["smiles"])})
+
+merge_csv(spec["output_csv"], state_rows,
+          ("smiles", "state_index", "functional", "basis"))
+n_total = merge_csv(spec["orbital_csv"], orbital_rows, ("smiles", "method", "basis"))
 finish({"states": state_rows, "molecules": orbital_rows, "failures": failures,
-        "images": images})
+        "images": images, "n_rows_in_orbital_csv": n_total,
+        "n_requested": len(spec["smiles"])})
 '''
 
 _OPTUNA_BODY = r'''
 import optuna
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+from opt_tddft.core.builder import MoleculeBuilder
 from opt_tddft.optimize.optuna_runner import OptunaOptimizer
 
 
 class Optimizer(OptunaOptimizer):
-    """opt_tddft の OptunaOptimizer に探索の打ち切り時間（timeout）を足したもの。"""
+    """opt_tddft の OptunaOptimizer に以下を足したサブクラス。
 
-    def run(self, study_name, n_trials=100, timeout=None):
+    - 探索の打ち切り時間 (timeout) と trial ごとの途中結果保存 (callbacks)
+    - **目的関数の対象波長を選べるようにする**。opt_tddft の既定は
+      「最長波長」だが、これは振動子強度 0 の暗状態（例クマリンの n->pi* S1）に
+      なることが多く、実測される吸収帯とずれる。objective="strongest" では
+      振動子強度が最大の波長（= 観測される吸収帯）を目的値にする。
+    - 振動子強度を user_attrs に残す（レポートのスペクトル描画で実値を使う）
+    """
+
+    def __init__(self, solver, search_space, objective="strongest",
+                 min_oscillator_strength=0.01):
+        super().__init__(solver, search_space)
+        self.objective = objective
+        self.min_f = float(min_oscillator_strength)
+
+    def pick_wavelength(self, wavelengths, strengths):
+        """目的関数で使う波長を選ぶ。"""
+        pairs = list(zip(wavelengths, strengths))
+        bright = [p for p in pairs if p[1] >= self.min_f] or pairs
+        if self.objective == "longest":
+            return max(w for w, _ in bright)
+        return max(bright, key=lambda pair: pair[1])[0]
+
+    def _objective(self, trial):
+        group1 = trial.suggest_categorical("pos1", self.pos1_choices)
+        group2 = trial.suggest_categorical("pos2", self.pos2_choices)
+        side_chains = [MoleculeBuilder.format_side_chain(group1, 1),
+                       MoleculeBuilder.format_side_chain(group2, 2)]
+        try:
+            smiles = MoleculeBuilder.build_from_scaffold(self.scaffold, side_chains)
+            trial.set_user_attr("smiles", smiles)
+        except ValueError as e:
+            print("[optuna] trial %d: assembly failed: %s" % (trial.number, e))
+            raise optuna.TrialPruned()
+
+        try:
+            result = self.solver.run_calculation(smiles)
+        except Exception as e:
+            print("[optuna] trial %d: calculation failed: %s" % (trial.number, e))
+            raise optuna.TrialPruned()
+
+        wavelengths = [float(w) for w in result["wavelengths_nm"]]
+        strengths = [float(f) for f in result["oscillator_strengths"]]
+        if not wavelengths:
+            raise optuna.TrialPruned()
+
+        trial.set_user_attr("homo_ev", result["homo_ev"])
+        trial.set_user_attr("lumo_ev", result["lumo_ev"])
+        trial.set_user_attr("wavelengths_nm", wavelengths)
+        trial.set_user_attr("oscillator_strengths", strengths)
+        chosen = self.pick_wavelength(wavelengths, strengths)
+        trial.set_user_attr("objective_wavelength_nm", chosen)
+        trial.set_user_attr("objective", self.objective)
+        print("[optuna] trial %d: %s -> %.1f nm (%s, target %.0f nm)"
+              % (trial.number, smiles, chosen, self.objective, self.target_wl))
+        return abs(chosen - self.target_wl)
+
+    def run(self, study_name, n_trials=100, timeout=None, callbacks=None):
         study = optuna.create_study(study_name=study_name,
                                     storage="sqlite:///%s.db" % study_name,
                                     direction="minimize", load_if_exists=True)
         study.optimize(self._objective, n_trials=n_trials, timeout=timeout,
-                       catch=(Exception,))
+                       catch=(Exception,), callbacks=callbacks or [])
         return study
 
 
@@ -312,74 +443,111 @@ search_space = {
     "side_chains": {"pos1": spec["side_chains_pos1"], "pos2": spec["side_chains_pos2"]},
     "target_wavelength_nm": spec["target_wavelength_nm"],
 }
-study = Optimizer(solver, search_space).run(
-    study_name=spec["study_name"], n_trials=spec["n_trials"],
-    timeout=spec["search_timeout_sec"])
-
-rows = []
-for trial in study.trials:
+def trial_row(trial):
     wavelengths = trial.user_attrs.get("wavelengths_nm") or []
-    rows.append({
+    strengths = trial.user_attrs.get("oscillator_strengths") or []
+    strongest = (max(zip(wavelengths, strengths), key=lambda p: p[1])
+                 if wavelengths and len(strengths) == len(wavelengths) else (None, None))
+    return {
         "trial": trial.number,
         "state": trial.state.name,
-        "objective_nm": None if trial.value is None else float(trial.value),
+        "difference_from_target_nm": None if trial.value is None else float(trial.value),
+        "objective_wavelength_nm": trial.user_attrs.get("objective_wavelength_nm"),
         "pos1": trial.params.get("pos1"),
         "pos2": trial.params.get("pos2"),
         "smiles": trial.user_attrs.get("smiles", ""),
+        "strongest_wavelength_nm": strongest[0],
+        "strongest_oscillator_strength": strongest[1],
         "max_wavelength_nm": max(wavelengths) if wavelengths else None,
         "homo_ev": trial.user_attrs.get("homo_ev"),
         "lumo_ev": trial.user_attrs.get("lumo_ev"),
         "n_states": len(wavelengths),
-    })
-write_csv(spec["output_csv"], rows)
+    }
 
-completed = [t for t in study.trials if t.state.name == "COMPLETE"]
-completed.sort(key=lambda t: t.value)
-summary = {
-    "study_name": spec["study_name"],
-    "storage": "%s.db" % spec["study_name"],
-    "target_wavelength_nm": spec["target_wavelength_nm"],
-    "scaffold": spec["scaffold"],
-    "n_trials_requested": spec["n_trials"],
-    "n_trials_total": len(study.trials),
-    "n_completed_trials": len(completed),
-    "n_pruned_trials": sum(1 for t in study.trials if t.state.name == "PRUNED"),
-    "functional": config.functional,
-    "basis": config.basis,
-    "nstates": config.nstates,
-    "solvent_model": config.solvent_model or "gas",
-    "best_smiles": None,
-    "best_wavelength_nm": None,
-    "difference_from_target_nm": None,
-    "best_params": None,
-    "top_trials": [],
-}
-if completed:
-    best = completed[0]
-    best_wavelengths = best.user_attrs.get("wavelengths_nm") or []
-    summary.update({
-        "best_trial": best.number,
-        "best_smiles": best.user_attrs.get("smiles", ""),
-        "best_wavelength_nm": max(best_wavelengths) if best_wavelengths else None,
-        "difference_from_target_nm": float(best.value),
-        "best_params": dict(best.params),
-        "best_homo_ev": best.user_attrs.get("homo_ev"),
-        "best_lumo_ev": best.user_attrs.get("lumo_ev"),
-    })
-    seen, top = set(), []
-    for trial in completed:
-        smiles = trial.user_attrs.get("smiles", "")
-        if smiles and smiles not in seen:
-            seen.add(smiles)
-            top.append(trial)
-        if len(top) >= 10:
-            break
-    summary["top_trials"] = [
-        {"trial": t.number, "smiles": t.user_attrs.get("smiles", ""),
-         "difference_from_target_nm": float(t.value),
-         "max_wavelength_nm": max(t.user_attrs.get("wavelengths_nm") or [0]) or None}
-        for t in top
-    ]
+
+def build_summary(study):
+    """study から summary dict と（SMILES 重複を除いた）上位 trial を作る。"""
+    completed = [t for t in study.trials if t.state.name == "COMPLETE"]
+    completed.sort(key=lambda t: t.value)
+    summary = {
+        "study_name": spec["study_name"],
+        "storage": "%s.db" % spec["study_name"],
+        "target_wavelength_nm": spec["target_wavelength_nm"],
+        "scaffold": spec["scaffold"],
+        "n_trials_requested": spec["n_trials"],
+        "n_trials_total": len(study.trials),
+        "n_completed_trials": len(completed),
+        "n_pruned_trials": sum(1 for t in study.trials if t.state.name == "PRUNED"),
+        "functional": config.functional,
+        "basis": config.basis,
+        "nstates": config.nstates,
+        "solvent_model": config.solvent_model or "gas",
+        "objective": spec["objective"],
+        "min_oscillator_strength": spec["min_oscillator_strength"],
+        "best_smiles": None,
+        "best_wavelength_nm": None,
+        "difference_from_target_nm": None,
+        "best_params": None,
+        "top_trials": [],
+    }
+    top = []
+    if completed:
+        best = completed[0]
+        best_row = trial_row(best)
+        summary.update({
+            "best_trial": best.number,
+            "best_smiles": best.user_attrs.get("smiles", ""),
+            # best_wavelength_nm = 目的関数が見ている波長（既定は最強吸収帯）
+            "best_wavelength_nm": best_row["objective_wavelength_nm"],
+            "best_strongest_wavelength_nm": best_row["strongest_wavelength_nm"],
+            "best_strongest_oscillator_strength": best_row["strongest_oscillator_strength"],
+            "best_max_wavelength_nm": best_row["max_wavelength_nm"],
+            "difference_from_target_nm": float(best.value),
+            "best_params": dict(best.params),
+            "best_homo_ev": best.user_attrs.get("homo_ev"),
+            "best_lumo_ev": best.user_attrs.get("lumo_ev"),
+        })
+        seen = set()
+        for trial in completed:
+            smiles = trial.user_attrs.get("smiles", "")
+            if smiles and smiles not in seen:
+                seen.add(smiles)
+                top.append(trial)
+            if len(top) >= 10:
+                break
+        summary["top_trials"] = [
+            {k: trial_row(t)[k] for k in
+             ("trial", "smiles", "difference_from_target_nm", "objective_wavelength_nm",
+              "strongest_wavelength_nm", "strongest_oscillator_strength",
+              "max_wavelength_nm")}
+            for t in top
+        ]
+    return summary, top, completed
+
+
+def write_outputs(study):
+    """CSV と summary JSON を書き、(summary, top, completed) を返す。"""
+    rows = [trial_row(t) for t in study.trials]
+    write_csv(spec["output_csv"], rows)
+    summary, top, completed = build_summary(study)
+    Path(spec["output_json"]).write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=float),
+        encoding="utf-8")
+    return rows, summary, top, completed
+
+
+def save_progress(study, trial):
+    """trial ごとに CSV / summary / 途中結果を更新する（打ち切られても残る）。"""
+    rows, summary, _top, _completed = write_outputs(study)
+    checkpoint({"trials": rows, "summary": summary, "reports": []})
+
+
+study = Optimizer(solver, search_space, objective=spec["objective"],
+                  min_oscillator_strength=spec["min_oscillator_strength"]).run(
+    study_name=spec["study_name"], n_trials=spec["n_trials"],
+    timeout=spec["search_timeout_sec"], callbacks=[save_progress])
+
+rows, summary, top, completed = write_outputs(study)
 
 reports = []
 if spec["generate_report"] and completed:
@@ -392,8 +560,11 @@ if spec["generate_report"] and completed:
         smiles = trial.user_attrs.get("smiles", "")
         wavelengths = trial.user_attrs.get("wavelengths_nm") or []
         # 振動子強度は user_attrs に残らないので、計算時に保持した結果から引く
-        cached = solver.last_results.get(smiles, {})
-        strengths = [float(f) for f in cached.get("oscillator_strengths", [])]
+        strengths = [float(f) for f in
+                     (trial.user_attrs.get("oscillator_strengths") or [])]
+        if len(strengths) != len(wavelengths):     # 再開した study では欠けることがある
+            cached = solver.last_results.get(smiles, {})
+            strengths = [float(f) for f in cached.get("oscillator_strengths", [])]
         if len(strengths) != len(wavelengths):
             strengths = [0.5] * len(wavelengths)
         image = "spectrum_trial_%d.png" % trial.number
@@ -415,8 +586,6 @@ if spec["generate_report"] and completed:
     reports = ["tddft_top_trials.json", "tddft_optimization_summary.xlsx",
                "tddft_optimization_summary.pptx", *images]
 
-Path(spec["output_json"]).write_text(
-    json.dumps(summary, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
 print("[optuna] completed=%d/%d best=%s"
       % (len(completed), len(study.trials), summary["best_smiles"]))
 finish({"summary": summary, "trials": rows, "reports": reports})
@@ -457,6 +626,10 @@ for distance in distances:
         current_xyz = result["optimized_xyz"]   # Relaxed scan: 前点の最適構造を引き継ぐ
         print("[esipt] d=%.2f A  S0=%.6f Eh  S1=%s"
               % (distance, e_s0, "n/a" if e_s1 is None else "%.6f Eh" % e_s1))
+        # 1 点ごとに保存（拘束付き最適化 + TDDFT は 1 点でも重い）
+        write_csv(spec["output_csv"], rows)
+        checkpoint({"points": rows, "failures": failures,
+                    "summary": {"n_points": len(rows)}})
     except Exception as e:
         failures.append({"distance_angstrom": float(distance),
                          "error": "%s: %s" % (type(e).__name__, e)})
@@ -521,7 +694,8 @@ finish({"summary": summary, "points": rows, "failures": failures})
 def _script(body: str, name: str) -> EnvScript:
     return EnvScript(body=_PRELUDE + body, script_name=f"_opttddft_{name}.py",
                      input_json=f"_opttddft_{name}_input.json",
-                     output_json=f"_opttddft_{name}_output.json")
+                     output_json=f"_opttddft_{name}_output.json",
+                     partial_json=f"_opttddft_{name}_partial.json")
 
 
 def _solver_spec(*, functional: str, basis: str, max_cycle: int, nstates: int,
@@ -548,6 +722,38 @@ def _failed(summary: str, error_type: str, retryable: bool = False) -> ToolResul
                       error_type=error_type)
 
 
+def _pending(requested: list[str], rows: list[dict], failures: list[dict]) -> list[str]:
+    """まだ結果も失敗も記録されていない入力（打ち切り時の残りタスク）。"""
+    done = {r.get("smiles") for r in rows} | {f.get("smiles") for f in failures}
+    return [s for s in requested if s not in done]
+
+
+_MEMORY_ERROR = re.compile(r"MemoryError|Unable to allocate|bad_alloc|out of memory",
+                           re.IGNORECASE)
+
+
+def _classify_failures(failures: list[dict], default: str) -> tuple[str, str]:
+    """スクリプト内で個別分子が落ちた理由から error_type と補足を決める。
+
+    pyscf はメモリ不足を MemoryError として送出することがある（プロセスは正常終了する
+    ため returncode では判別できない）。この場合は上限を上げる案内に切り替える。
+    """
+    if failures and all(_MEMORY_ERROR.search(str(f.get("error", ""))) for f in failures):
+        return ("out_of_memory",
+                "（メモリ不足です。memory_limit_mb を上げるか、基底関数・状態数・"
+                "分子数を下げてください）")
+    return default, ""
+
+
+def _partial_note(run, pending: list[str]) -> str:
+    """途中打ち切り時に、残りをどう処理すればよいかを summary に添える。"""
+    note = f" ※途中で打ち切られました（{run.interrupted_reason}）"
+    if pending:
+        listed = ", ".join(pending[:3]) + ("…" if len(pending) > 3 else "")
+        note += f"。未処理 {len(pending)} 件（{listed}）は分けて呼び直してください"
+    return note
+
+
 # ---------------------------------------------------------------------------
 # 1. calculate_orbitals（旧 tools/chem.py の pyscf 実装の置き換え）
 # ---------------------------------------------------------------------------
@@ -567,6 +773,7 @@ def calculate_orbitals(
     output_csv: str = "orbital_features.csv",
     timeout_sec: int | None = None,
     threads: int = 4,
+    memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     *,
     sandbox,
 ) -> ToolResult:
@@ -589,7 +796,7 @@ def calculate_orbitals(
     }
     run = run_env_script(
         sandbox, workspace, _script(_ORBITALS_BODY, "orbitals"), spec,
-        timeout_sec=timeout_sec, threads=threads,
+        timeout_sec=timeout_sec, threads=threads, memory_limit_mb=memory_limit_mb,
         extra_failures=(_GEOMETRIC_FAILURE, *_PYSCF_FAILURES),
         timeout_hint="分子数を分割するか、基底関数を小さくしてください。",
     )
@@ -598,23 +805,33 @@ def calculate_orbitals(
 
     rows = run.payload.get("results", [])
     failures = run.payload.get("failures", [])
+    pending = _pending(list(smiles), rows, failures)
     if not rows:
+        error_type, note = _classify_failures(failures, "scf_failed")
         return ToolResult(
             status="failed",
-            summary=f"{len(smiles)} 分子すべてで軌道計算に失敗しました",
-            data={"failures": failures, "stdout": run.stdout[-2000:]},
-            retryable=True, error_type="scf_failed",
+            summary=(f"{len(smiles)} 分子すべてで軌道計算に失敗しました" + note
+                     + (_partial_note(run, pending) if run.partial else "")),
+            data={"failures": failures, "pending": pending,
+                  "stdout": run.stdout[-2000:]},
+            retryable=True,
+            error_type="timeout" if run.partial else error_type,
         )
 
     csv_path = workspace / output_csv
+    n_in_csv = run.payload.get("n_rows_in_csv") or len(rows)
+    summary = (f"HOMO/LUMO を {len(rows)}/{len(smiles)} 分子で計算 "
+               f"({method}/{basis}) → {csv_path.name}（累計 {n_in_csv} 行）")
+    if run.partial:
+        summary += _partial_note(run, pending)
     return ToolResult(
-        status="success" if not failures else "partial",
-        summary=(f"HOMO/LUMO を {len(rows)}/{len(smiles)} 分子で計算 "
-                 f"({method}/{basis}) → {csv_path.name}"),
+        status="success" if not (failures or run.partial) else "partial",
+        summary=summary,
         data={"output_csv": str(csv_path), "results": rows, "failures": failures,
-              "engine": "opt_tddft"},
+              "pending": pending, "engine": "opt_tddft", "interrupted": run.partial},
         artifacts=[artifact(csv_path)] if csv_path.exists() else [],
-        error_type="scf_failed" if failures else None,
+        retryable=bool(run.partial),
+        error_type=("timeout" if run.partial else ("scf_failed" if failures else None)),
     )
 
 
@@ -640,6 +857,7 @@ def calculate_tddft_spectrum(
     plot_stdev: float = 50000.0,
     timeout_sec: int | None = None,
     threads: int = 4,
+    memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     *,
     sandbox,
 ) -> ToolResult:
@@ -668,7 +886,7 @@ def calculate_tddft_spectrum(
     }
     run = run_env_script(
         sandbox, workspace, _script(_SPECTRUM_BODY, "spectrum"), spec,
-        timeout_sec=timeout_sec, threads=threads,
+        timeout_sec=timeout_sec, threads=threads, memory_limit_mb=memory_limit_mb,
         extra_failures=(_GEOMETRIC_FAILURE, *_PYSCF_FAILURES),
         timeout_hint=("分子数を分割し、nstates や基底関数を下げるか "
                       "timeout_sec を上げてください。"),
@@ -678,29 +896,42 @@ def calculate_tddft_spectrum(
 
     molecules = run.payload.get("molecules", [])
     failures = run.payload.get("failures", [])
+    pending = _pending(list(smiles), molecules, failures)
     if not molecules:
+        error_type, note = _classify_failures(failures, "tddft_failed")
         return ToolResult(
             status="failed",
-            summary=f"{len(smiles)} 分子すべてで TDDFT 計算に失敗しました",
-            data={"failures": failures, "stdout": run.stdout[-2000:]},
-            retryable=True, error_type="tddft_failed",
+            summary=(f"{len(smiles)} 分子すべてで TDDFT 計算に失敗しました" + note
+                     + (_partial_note(run, pending) if run.partial else "")),
+            data={"failures": failures, "pending": pending,
+                  "stdout": run.stdout[-2000:]},
+            retryable=True,
+            error_type="timeout" if run.partial else error_type,
         )
 
     outputs = [workspace / output_csv, workspace / orbital_csv]
     outputs += [workspace / name for name in run.payload.get("images", [])]
     lambda_max = ", ".join(f"{m['smiles']}: {m['max_wavelength_nm']:.0f}nm"
                            for m in molecules[:3])
+    n_in_csv = run.payload.get("n_rows_in_orbital_csv") or len(molecules)
+    summary = (f"TDDFT ({functional}/{basis}, nstates={nstates}) で "
+               f"{len(molecules)}/{len(smiles)} 分子のスペクトルを計算 → "
+               f"{output_csv} / {orbital_csv}（λmax {lambda_max}、"
+               f"{orbital_csv} は累計 {n_in_csv} 行）")
+    if run.partial:
+        summary += _partial_note(run, pending)
     return ToolResult(
-        status="success" if not failures else "partial",
-        summary=(f"TDDFT ({functional}/{basis}, nstates={nstates}) で "
-                 f"{len(molecules)}/{len(smiles)} 分子のスペクトルを計算 → "
-                 f"{output_csv} / {orbital_csv}（λmax {lambda_max}）"),
+        status="success" if not (failures or run.partial) else "partial",
+        summary=summary,
         data={"output_csv": str(workspace / output_csv),
               "orbital_csv": str(workspace / orbital_csv),
               "molecules": molecules, "states": run.payload.get("states", []),
-              "failures": failures, "images": run.payload.get("images", [])},
+              "failures": failures, "pending": pending,
+              "images": run.payload.get("images", []), "interrupted": run.partial},
         artifacts=[artifact(p) for p in outputs if p.exists()],
-        error_type="tddft_failed" if failures else None,
+        retryable=bool(run.partial),
+        error_type=("timeout" if run.partial
+                    else ("tddft_failed" if failures else None)),
     )
 
 
@@ -714,6 +945,8 @@ def optimize_absorption_wavelength(
     side_chains_pos1: list[str],
     side_chains_pos2: list[str],
     target_wavelength_nm: float = 500.0,
+    objective: str = "strongest",
+    min_oscillator_strength: float = 0.01,
     n_trials: int = 10,
     study_name: str = "tddft_mi_optimization",
     functional: str = "CAMB3LYP",
@@ -731,6 +964,7 @@ def optimize_absorption_wavelength(
     plot_stdev: float = 50000.0,
     timeout_sec: int | None = None,
     threads: int = 4,
+    memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     *,
     sandbox,
 ) -> ToolResult:
@@ -743,6 +977,9 @@ def optimize_absorption_wavelength(
                        "invalid_input")
     if n_trials < 1:
         return _failed("n_trials は 1 以上にしてください", "invalid_input")
+    if objective not in ("strongest", "longest"):
+        return _failed("objective は 'strongest'（振動子強度が最大の吸収帯）または "
+                       "'longest'（最長波長）にしてください", "invalid_input")
 
     workspace = Path(workspace)
     # 1 trial あたりの計算上限は探索全体の打ち切り時間に合わせる（Prune で先へ進む）
@@ -752,6 +989,8 @@ def optimize_absorption_wavelength(
         "side_chains_pos1": list(side_chains_pos1),
         "side_chains_pos2": list(side_chains_pos2),
         "target_wavelength_nm": float(target_wavelength_nm),
+        "objective": objective,
+        "min_oscillator_strength": float(min_oscillator_strength),
         "n_trials": int(n_trials),
         "study_name": study_name,
         "search_timeout_sec": int(search_timeout_sec),
@@ -769,6 +1008,7 @@ def optimize_absorption_wavelength(
     run = run_env_script(
         sandbox, workspace, _script(_OPTUNA_BODY, "optuna"), spec,
         timeout_sec=timeout_sec or search_timeout_sec + 600, threads=threads,
+        memory_limit_mb=memory_limit_mb,
         extra_failures=(_GEOMETRIC_FAILURE, *_PYSCF_FAILURES),
         timeout_hint=("search_timeout_sec を下げる（打ち切り後も結果は保存されます）か、"
                       "基底関数・nstates を下げてください。"),
@@ -793,21 +1033,30 @@ def optimize_absorption_wavelength(
         )
 
     best_wavelength = summary.get("best_wavelength_nm")
-    headline = (f"Optuna 探索完了: {completed}/{summary.get('n_trials_total')} trial 成功 "
+    headline = (f"Optuna 探索{'（途中打ち切り）' if run.partial else '完了'}: "
+                f"{completed}/{summary.get('n_trials_total')} trial 成功 "
                 f"(pruned {summary.get('n_pruned_trials', 0)})、"
                 f"best={summary.get('best_smiles')}")
     if best_wavelength is not None:
-        headline += (f" λmax={best_wavelength:.1f}nm "
+        label = ("最強吸収帯" if objective == "strongest" else "最長波長")
+        headline += (f" {label}={best_wavelength:.1f}nm "
                      f"(target {target_wavelength_nm:.0f}nm, "
-                     f"Δ={summary.get('difference_from_target_nm', 0.0):.1f}nm)")
+                     f"Δ={summary.get('difference_from_target_nm', 0.0):.1f}nm"
+                     f"、f={summary.get('best_strongest_oscillator_strength') or 0:.3f})")
+    if run.partial:
+        headline += (f" ※{run.interrupted_reason}。同じ study_name で呼び直すと"
+                     "探索を再開できます")
     return ToolResult(
-        status="success",
+        status="partial" if run.partial else "success",
         summary=headline,
         data={"summary": summary, "trials": run.payload.get("trials", []),
               "output_json": str(workspace / output_json),
               "output_csv": str(workspace / output_csv),
-              "reports": run.payload.get("reports", [])},
+              "reports": run.payload.get("reports", []),
+              "interrupted": run.partial},
         artifacts=[artifact(p) for p in outputs if p.exists()],
+        retryable=bool(run.partial),
+        error_type="timeout" if run.partial else None,
     )
 
 
@@ -836,6 +1085,7 @@ def scan_esipt_pes(
     output_json: str = "esipt_scan_summary.json",
     timeout_sec: int | None = None,
     threads: int = 4,
+    memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     *,
     sandbox,
 ) -> ToolResult:
@@ -886,7 +1136,7 @@ def scan_esipt_pes(
     }
     run = run_env_script(
         sandbox, workspace, _script(_ESIPT_BODY, "esipt"), spec,
-        timeout_sec=timeout_sec, threads=threads,
+        timeout_sec=timeout_sec, threads=threads, memory_limit_mb=memory_limit_mb,
         extra_failures=(_GEOMETRIC_FAILURE, *_PYSCF_FAILURES),
         timeout_hint=("スキャン範囲を分割する（start_dist/end_dist）か step_size を "
                       "粗くしてください。"),
@@ -898,14 +1148,20 @@ def scan_esipt_pes(
     failures = run.payload.get("failures", [])
     outputs = [workspace / output_csv, workspace / output_png, workspace / output_json]
     barrier = summary.get("s1_barrier_kcal")
+    headline = (f"ESIPT PES スキャン: {summary.get('n_points')}/{n_points} 点を計算 "
+                f"(S0 barrier {summary.get('s0_barrier_kcal') or 0:.1f} kcal/mol, "
+                f"S1 barrier {barrier if barrier is None else round(barrier, 1)} kcal/mol) "
+                f"→ {output_csv} / {output_png}")
+    if run.partial:
+        headline += (f" ※途中で打ち切られました（{run.interrupted_reason}）。"
+                     "残りの距離範囲を start_dist/end_dist で分けて呼び直してください")
     return ToolResult(
-        status="success" if not failures else "partial",
-        summary=(f"ESIPT PES スキャン: {summary.get('n_points')}/{n_points} 点を計算 "
-                 f"(S0 barrier {summary.get('s0_barrier_kcal', 0):.1f} kcal/mol, "
-                 f"S1 barrier {barrier if barrier is None else round(barrier, 1)} kcal/mol) "
-                 f"→ {output_csv} / {output_png}"),
+        status="success" if not (failures or run.partial) else "partial",
+        summary=headline,
         data={"summary": summary, "points": run.payload.get("points", []),
-              "failures": failures},
+              "failures": failures, "interrupted": run.partial},
         artifacts=[artifact(p) for p in outputs if p.exists()],
-        error_type="scan_incomplete" if failures else None,
+        retryable=bool(run.partial),
+        error_type=("timeout" if run.partial
+                    else ("scan_incomplete" if failures else None)),
     )

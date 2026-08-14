@@ -41,6 +41,13 @@
   .b-running { background: var(--run); } .b-succeeded { background: var(--ok); }
   .b-failed { background: var(--bad); } .b-error { background: var(--bad); }
   .b-pending { background: var(--muted); }
+  .b-awaiting_decision { background: var(--warn); }
+  .decide { border: 2px solid var(--warn); background: #fffbeb; }
+  .decide h2 { color: #92400e; }
+  .decide .row { flex-wrap: wrap; }
+  .decide button { background: var(--warn); color: #fff; font-weight: 600; }
+  .decide button.stop { background: #6b7280; }
+  .decide input[type=text] { max-width: 8rem; }
   #runs .item { padding: .55rem .4rem; border-bottom: 1px solid var(--border);
                 cursor: pointer; border-radius: 4px; }
   #runs .item:hover { background: #eef2ff; }
@@ -517,7 +524,9 @@ async function refreshDetail(reset) {
   updateStructures(detail);
 
   clearTimeout(pollTimer);
-  if (detail.status === "running") pollTimer = setTimeout(() => refreshDetail(false), 2500);
+  if (detail.status === "running" || detail.status === "awaiting_decision") {
+    pollTimer = setTimeout(() => refreshDetail(false), 2500);
+  }
 }
 
 const RESULT_MARKS = { success: "✔", partial: "◑", failed: "✘", blocked: "⛔" };
@@ -537,6 +546,12 @@ function traceLine(event) {
   } else if (p.phase === "attempt") {
     text = `試行 ${p.attempt}/${p.max_attempts}`
       + ((p.repairs || []).length ? `（修復指示 ${p.repairs.length} 件）` : "");
+  } else if (p.phase === "attempt_timeout_pending") {
+    text = `⏳ 試行 ${p.attempt} が ${p.waited_sec}s 経過 — さらに待つか確認中`;
+  } else if (p.phase === "attempt_timeout_extended") {
+    text = `延長 +${p.extend_sec}s（累計 ${p.new_deadline_sec}s）`;
+  } else if (p.phase === "attempt_timeout_limit") {
+    text = `延長回数の上限 ${p.max_timeout_extensions} に達したため打ち切り`;
   } else if (p.phase === "verifying") {
     text = `Verifier 検査中 (attempt ${p.attempt})`;
   } else if (p.phase === "finished") {
@@ -567,6 +582,7 @@ function renderDetail(detail, newEvents, reset) {
   const userHtml = artifacts.find(a => relative(a.path) === "report_user.html");
 
   container.innerHTML = `
+    ${timeoutCard(detail)}
     <div class="card">
       <h2>${badge(detail.status)} <span class="mono">${esc(detail.run_id)}</span>
         <span class="hint">provider=${esc(detail.provider || "?")}
@@ -597,6 +613,48 @@ function renderDetail(detail, newEvents, reset) {
       <pre>${esc(detail.report_md)}</pre></div>` : ""}`;
   const traceBox = $("trace");
   if (traceBox) traceBox.scrollTop = traceBox.scrollHeight;
+}
+
+/** 実時間上限に達して判断待ちの run に、延長/打ち切りの選択肢を出す。 */
+function timeoutCard(detail) {
+  const info = detail.timeout_info;
+  if (detail.status !== "awaiting_decision" || !info) return "";
+  const hours = (info.waited_sec / 3600).toFixed(1);
+  return `<div class="card decide">
+    <h2>⏳ 実行時間の上限に達しました — さらに待ちますか？</h2>
+    <div>試行 ${esc(info.attempt)} が <b>${esc(info.waited_sec)} 秒（約 ${hours} 時間）</b>
+      経過しました（延長 ${esc(info.extensions)} 回）。
+      待つ場合はエージェントの作業を止めずに続行します（計算はやり直しません）。</div>
+    <div class="row" style="margin-top:.6rem">
+      <button onclick="decideTimeout(3600)">+1 時間</button>
+      <button onclick="decideTimeout(21600)">+6 時間</button>
+      <button onclick="decideTimeout(86400)">+1 日</button>
+      <button onclick="decideTimeout(259200)">+3 日</button>
+      <button class="stop" onclick="decideTimeout(0)">打ち切って報告する</button>
+    </div>
+    <div class="row" style="margin-top:.4rem">
+      <input type="text" id="extendSec" placeholder="秒数を指定（例 43200）">
+      <button onclick="decideTimeout(Number($('extendSec').value) || 0)">この秒数で延長</button>
+    </div>
+    <div class="hint" id="decideStat">打ち切ると、その時点の成果物で検証・報告します
+      （途中結果は保存済みです）。</div>
+  </div>`;
+}
+
+async function decideTimeout(seconds) {
+  const body = seconds > 0 ? { extend_sec: seconds } : { stop: true };
+  const status = $("decideStat");
+  try {
+    const data = await api(`/api/runs/${selected}/timeout`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (status) {
+      status.textContent = data.decision === "extend"
+        ? `あと ${data.extend_sec} 秒待ちます` : "打ち切りました";
+    }
+    refreshDetail(false);
+  } catch (e) { if (status) status.textContent = "失敗: " + e.message; }
 }
 
 const relative = (p) => String(p).split("/" + selected + "/").pop();
@@ -737,6 +795,7 @@ async function updateStructures(detail) {
 // HTML 側の onclick 属性から呼ぶため明示的に公開する
 window.selectRun = selectRun;
 window.loadRuns = loadRuns;
+window.decideTimeout = decideTimeout;
 
 renderPresets();
 loadProviders();

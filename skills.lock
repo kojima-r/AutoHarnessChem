@@ -3,25 +3,29 @@
     "version": "1.0.0",
     "sha256": "5c400c7cbdd945d84f151f28586b73fb0ebec093e9c55c4c2e55a2d010b22025"
   },
+  "complex-task-planning": {
+    "version": "1.1.0",
+    "sha256": "700177c4bad003144936937de9dc67317e38e6dfcd598808be0464de2555ebd2"
+  },
   "dataset-inspection": {
     "version": "1.0.0",
     "sha256": "3fe2edce854579380dec7ea03c49523def42ba0009c54b06f8cad66fb606d613"
   },
   "esipt-pes-scan": {
-    "version": "1.0.0",
-    "sha256": "0295680c2b3a16ed6949aa4cd795e0828080e90012802ae6516fe31ab7112d02"
+    "version": "1.1.0",
+    "sha256": "cbbd7cc1616be155983c10d3c41ef3fd442101d959a1fff76a4a3adfe9a1deb6"
   },
   "execution-recovery": {
-    "version": "1.1.0",
-    "sha256": "86eda48c6d19dbb8caf2248b88bbd5a6d84cb306a79667a11068f65404f57bbd"
+    "version": "1.2.0",
+    "sha256": "30a7e2ef853ddfbc6f715569304d352aa8b5ecd38f7be3bcb07bfbe15a4a31aa"
   },
   "molecular-regression": {
     "version": "1.0.0",
     "sha256": "6bccfa8f48bb7b02b9c2f9ff61bf37dcc6a0ff33cfee2fbf9be987dec42d4963"
   },
   "pyscf-orbitals": {
-    "version": "2.0.0",
-    "sha256": "c92debfabcf728498459aab3fc6057fa3f6af33ead48bea31473497a13dfa10f"
+    "version": "2.2.0",
+    "sha256": "29fe0dd9b46cea14b57fde0c0da178ee9b73319511aa7e9ea581310077a6ac4a"
   },
   "rdkit-preparation": {
     "version": "1.1.0",
@@ -40,7 +44,7 @@
     "sha256": "f2efd21869ccbf50c24363ec4c4bb2f8578727615163adca8dfcab83b85baf03"
   },
   "tddft-molecular-design": {
-    "version": "1.0.0",
-    "sha256": "327c12e374bac71ca9635e1d936cc57a7199b7318b01f50cbe128f6f5773ec5c"
+    "version": "1.1.0",
+    "sha256": "c5fc1c59b779491b37f31efd291aba375f8b6a3807b5de4780abf3988b5e35de"
   }
 }

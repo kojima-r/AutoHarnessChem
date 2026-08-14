@@ -57,6 +57,10 @@ class TaskSpec(BaseModel):
     task_id: str = Field(default_factory=lambda: new_id("task"))
     description: str
     task_type: TaskType = "generic"
+    # 複合タスク（例: 分子設計 + TDDFT + 逆合成 + 報告）で追加検出された側面。
+    # Skill 選択と Verifier のドメイン検査は primary + secondary の両方を対象にする。
+    # 期待出力（= 必須要件）は primary のものだけを使う（誤検出で不合格にしないため）
+    secondary_task_types: list[TaskType] = Field(default_factory=list)
     inputs: dict[str, Any] = Field(default_factory=dict)
     required_skills: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
@@ -103,6 +107,13 @@ class SandboxConfig(BaseModel):
     named_envs: dict[str, dict[str, str]] = Field(default_factory=lambda: {
         "opttddft": {"conda_env": "pyscf",
                      "image": "autoharnesschem/opttddft:latest"},
+        # RDKit / pandas / scikit-learn 系ツール（量子化学環境に同居している）
+        "rdkit": {"conda_env": "pyscf",
+                  "image": "autoharnesschem/opttddft:latest"},
+        # 構造最適化を伴う計算（ESIPT の PES スキャン / use_geom_opt）用。
+        # geomeTRIC を含む環境を分けておく（既定環境の numpy ピンを崩さないため）
+        "esipt": {"conda_env": "pyscf_esipt",
+                  "image": "autoharnesschem/opttddft:latest"},
         "reactiont5": {"conda_env": "reactiont5",
                        "image": "autoharnesschem/reactiont5:latest"},
         "aizynth": {"conda_env": "aizynth",
@@ -113,9 +124,19 @@ class SandboxConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     provider: Provider = "deepagents"
     model: str = "default"
-    max_steps: int = 30
-    max_tool_calls: int = 20
+    max_steps: int = 60
+    max_tool_calls: int = 40
     max_replans: int = 3
+    # 1 試行の実時間上限。超えたときの扱いは on_attempt_timeout で決める
+    attempt_timeout_sec: int = 3600
+    # ask   = ユーザに「さらに待つか」を確認して延長する（応答できない環境では stop）
+    # extend= 確認せず自動で延長する（無人の長時間実行向け）
+    # stop  = 打ち切り、その時点の成果物で検証・報告する
+    on_attempt_timeout: Literal["ask", "extend", "stop"] = "ask"
+    # 1 回の延長で追加する秒数（ユーザが秒数を指定した場合はそれが優先）
+    timeout_extension_sec: int = 3600
+    # 延長回数の上限。None なら無制限（数日かかる計算を待てるようにする）
+    max_timeout_extensions: int | None = None
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
 
 
@@ -123,12 +144,15 @@ class RunState(BaseModel):
     run_id: str = Field(default_factory=lambda: new_id("run"))
     provider: Provider
     status: Literal[
-        "pending", "running", "verifying", "repairing",
+        "pending", "running", "awaiting_decision", "verifying", "repairing",
         "succeeded", "failed", "blocked",
     ] = "pending"
     attempts: int = 0
     workspace: str = ""
     session_ref: str | None = None  # SDK側の session/thread id（resume 用）
+    # 実時間上限を延長した回数と、延長で足した合計秒数
+    timeout_extensions: int = 0
+    extended_sec: int = 0
 
 
 class RunReport(BaseModel):
@@ -137,6 +161,9 @@ class RunReport(BaseModel):
     provider: Provider
     passed: bool
     attempts: int
+    # 実時間上限を延長した回数 / 追加した秒数（長時間実行の記録）
+    timeout_extensions: int = 0
+    extended_sec: int = 0
     verification: VerificationResult
     artifacts: list[Artifact] = Field(default_factory=list)
     final_message: str = ""

@@ -23,7 +23,19 @@ from schemas import ToolResult
 # stderr のパターン → (error_type, retryable, ヒント文（{env} / 名前付きgroupを展開）)
 FailureRule = tuple[str, str, bool, str]
 
+_DOCKER_HINT = (
+    "docker image が使えません（未ビルド / daemon 停止 / 権限不足）。"
+    "`docker build -t <image> -f docker/Dockerfile.<tool> .` でビルドするか、"
+    "config の sandbox.type を local にして conda 環境で実行してください"
+    "（agent 側では修復不能）。"
+)
+
 _COMMON_FAILURES: tuple[FailureRule, ...] = (
+    (r"Unable to find image|pull access denied|manifest for .* not found",
+     "missing_environment", False, "指定された " + _DOCKER_HINT),
+    (r"Cannot connect to the Docker daemon|permission denied while trying to connect"
+     r"|Error response from daemon|docker: 'run' is not a docker command",
+     "missing_environment", False, _DOCKER_HINT),
     (r"EnvironmentLocationNotFound|Could not find conda environment",
      "missing_environment", False,
      "conda 環境 `{env}` が見つかりません。"
@@ -41,28 +53,39 @@ _COMMON_FAILURES: tuple[FailureRule, ...] = (
 class EnvScript:
     """専用環境で実行する自己完結スクリプトと、その入出力ファイル名。
 
-    body 中の `__INPUT_JSON__` / `__OUTPUT_JSON__` が実ファイル名へ置換される
-    （.format() は本文の {} と衝突するため使わない）。
+    body 中の `__INPUT_JSON__` / `__OUTPUT_JSON__` / `__PARTIAL_JSON__` が
+    実ファイル名へ置換される（.format() は本文の {} と衝突するため使わない）。
+
+    partial_json を持つスクリプトは、1 件処理するたびに途中結果をそこへ書き出す。
+    タイムアウトや強制終了でも「そこまでの結果」を回収できる。
     """
     body: str
     script_name: str
     input_json: str
     output_json: str
+    partial_json: str | None = None
 
     def render(self) -> str:
         return (self.body
                 .replace("__INPUT_JSON__", self.input_json)
-                .replace("__OUTPUT_JSON__", self.output_json))
+                .replace("__OUTPUT_JSON__", self.output_json)
+                .replace("__PARTIAL_JSON__", self.partial_json or "_partial.json"))
 
 
 @dataclass
 class EnvRun:
-    """実行結果。error が None でなければそのまま return してよい ToolResult。"""
+    """実行結果。error が None でなければそのまま return してよい ToolResult。
+
+    partial=True は「途中で打ち切られたが payload に完了分が入っている」状態。
+    呼び出し側は status="partial" の ToolResult を組み立てる。
+    """
     payload: dict | None
     error: ToolResult | None
     stdout: str = ""
     stderr: str = ""
     new_files: tuple[str, ...] = ()
+    partial: bool = False
+    interrupted_reason: str = ""
 
 
 def with_limits(sandbox, timeout_sec: int | None = None, threads: int = 1,
@@ -78,7 +101,10 @@ def with_limits(sandbox, timeout_sec: int | None = None, threads: int = 1,
     update: dict = {}
     if timeout_sec is not None:
         update["timeout_sec"] = int(timeout_sec)
-        update["cpu_limit_sec"] = int(timeout_sec) * max(1, int(threads))
+        # 全スレッドが回ると CPU 時間 = 実時間 × スレッド数 になるため、実時間の
+        # timeout が先に効くように 1 スレッド分の余裕を持たせる（CPU 上限による
+        # SIGKILL は「タイムアウト」より原因が分かりにくいので後回しにする）
+        update["cpu_limit_sec"] = int(timeout_sec) * (max(1, int(threads)) + 1)
     if memory_limit_mb is not None:
         update["memory_limit_mb"] = int(memory_limit_mb)
     relaxed = copy.copy(sandbox)
@@ -108,17 +134,34 @@ def run_env_script(sandbox, workspace: Path, script: EnvScript, spec: dict, *,
     (workspace / script.input_json).write_text(
         json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     output_path = workspace / script.output_json
-    if output_path.exists():
-        output_path.unlink()  # 前回の結果を成功と誤認しないように消す
+    partial_path = workspace / script.partial_json if script.partial_json else None
+    for stale in (output_path, partial_path):
+        if stale is not None and stale.exists():
+            stale.unlink()  # 前回の結果を成功と誤認しないように消す
 
     result = sandbox.run(script.render(), script_name=script.script_name)
     common = {"stdout": result.stdout[-4000:], "stderr": result.stderr[-4000:]}
     new_files = tuple(result.new_files)
 
+    def rescue_partial(reason: str) -> EnvRun | None:
+        """打ち切られても、スクリプトが書いた途中結果があればそれを返す。"""
+        if partial_path is None or not partial_path.exists():
+            return None
+        try:
+            payload = json.loads(partial_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return EnvRun(payload, None, result.stdout, result.stderr, new_files,
+                      partial=True, interrupted_reason=reason)
+
     if result.timed_out:
+        timeout_message = (f"{sandbox.config.timeout_sec}s でタイムアウトしました。"
+                           f"{timeout_hint}")
+        rescued = rescue_partial(timeout_message)
+        if rescued is not None:
+            return rescued
         return EnvRun(None, ToolResult(
-            status="failed",
-            summary=f"{sandbox.config.timeout_sec}s でタイムアウトしました。{timeout_hint}",
+            status="failed", summary=timeout_message,
             data=common, retryable=True, error_type="timeout",
         ), result.stdout, result.stderr, new_files)
 
@@ -132,11 +175,26 @@ def run_env_script(sandbox, workspace: Path, script: EnvScript, spec: dict, *,
                     f"{sandbox.config.memory_limit_mb}MB / CPU 上限 "
                     f"{sandbox.config.cpu_limit_sec}s の超過が主因）。"
                     "入力を小さくするか memory_limit_mb を上げてください。")
+        elif result.returncode in (-11, 139):
+            # SIGSEGV。BLAS/pyscf のような C 拡張は、アドレス空間上限
+            # (RLIMIT_AS = memory_limit_mb) に達すると malloc 失敗を検査せず
+            # segfault することがある。まずメモリ上限を疑う
+            error_type, retryable = "out_of_memory", True
+            hint = (f"計算ライブラリが SIGSEGV で落ちました。メモリ上限 "
+                    f"{sandbox.config.memory_limit_mb}MB が不足している可能性が高い"
+                    "です（C 拡張は確保失敗を検査せず落ちることがあります）。"
+                    "memory_limit_mb を上げる、基底関数・状態数・分子数を下げる、"
+                    "スレッド数を減らす、の順に試してください。")
         else:
             error_type, retryable, hint = classify_failure(result.stderr, env, extra_failures)
+        message = f"{hint} (returncode={result.returncode})"
+        # 途中まで計算できていれば、環境の問題でない限り部分結果として返す
+        if error_type not in ("missing_environment", "missing_dependency"):
+            rescued = rescue_partial(message)
+            if rescued is not None:
+                return rescued
         return EnvRun(None, ToolResult(
-            status="failed",
-            summary=f"{hint} (returncode={result.returncode})",
+            status="failed", summary=message,
             data=common, retryable=retryable, error_type=error_type,
         ), result.stdout, result.stderr, new_files)
 

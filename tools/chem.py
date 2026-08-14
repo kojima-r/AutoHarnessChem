@@ -1,12 +1,13 @@
-"""共通ツール実装。
+"""共通ツール実装（追加の依存を持たないもの）。
 
-すべて ToolResult を返す。重い依存 (rdkit / sklearn) は遅延 import し、
-無ければ status="failed", error_type="missing_dependency" を返す。
-ファイル出力はすべて workspace 配下に限定する。
+すべて ToolResult を返す。ファイル出力はすべて workspace 配下に限定する。
 
-量子化学計算（HOMO/LUMO・TDDFT・PES スキャン・MI 探索）は tools/opttddft.py
-（OptTDDFT を専用の pyscf 環境で実行）が担当する。逆合成経路探索は
-tools/aizynth.py。
+重い依存が必要なツールはそれぞれ専用環境で実行するモジュールに分かれている:
+  - tools/chemenv.py   … RDKit / pandas / scikit-learn 系（正準化・記述子・CV 等）
+  - tools/opttddft.py  … 量子化学（HOMO/LUMO・TDDFT・PES スキャン・MI 探索）
+  - tools/reactiont5.py … ReactionT5v2 による反応予測
+  - tools/aizynth.py   … AiZynthFinder による逆合成経路探索
+  - tools/report.py    … 構造式付き HTML レポート
 """
 from __future__ import annotations
 
@@ -46,262 +47,7 @@ def _resolve_input(workspace: Path, path: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 1. inspect_dataset
-# ---------------------------------------------------------------------------
-
-def inspect_dataset(workspace: Path, path: str) -> ToolResult:
-    try:
-        import pandas as pd
-    except ImportError:
-        return _missing("pandas")
-    f = _resolve_input(workspace, path)
-    if not f.exists():
-        return ToolResult(status="failed", summary=f"dataset not found: {path}",
-                          retryable=False, error_type="input_not_found")
-    df = pd.read_csv(f)
-    info = {
-        "path": str(f),
-        "n_rows": int(len(df)),
-        "columns": {c: str(t) for c, t in df.dtypes.items()},
-        "n_missing": {c: int(n) for c, n in df.isna().sum().items() if n > 0},
-        "head": df.head(5).to_dict(orient="records"),
-    }
-    numeric = df.select_dtypes("number")
-    if len(numeric.columns):
-        info["describe"] = json.loads(numeric.describe().to_json())
-    return ToolResult(status="success",
-                      summary=f"{f.name}: {len(df)} rows, columns={list(df.columns)}",
-                      data=info)
-
-
-# ---------------------------------------------------------------------------
-# 2. standardize_smiles
-# ---------------------------------------------------------------------------
-
-def standardize_smiles(workspace: Path, smiles: list[str]) -> ToolResult:
-    try:
-        from rdkit import Chem
-        try:
-            from rdkit.Chem.MolStandardize import rdMolStandardize
-        except ImportError:
-            from rdkit.Chem import rdMolStandardize  # 移設に備えた保険
-    except ImportError:
-        return _missing("rdkit")
-
-    results, failures = [], []
-    for smi in smiles:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            failures.append(smi)
-            results.append({"input": smi, "canonical": None, "error": "parse_failed"})
-            continue
-        mol = rdMolStandardize.Cleanup(mol)
-        mol = rdMolStandardize.FragmentParent(mol)
-        results.append({"input": smi, "canonical": Chem.MolToSmiles(mol), "error": None})
-
-    status = "success" if not failures else ("partial" if len(failures) < len(smiles) else "failed")
-    return ToolResult(
-        status=status,
-        summary=f"standardized {len(smiles) - len(failures)}/{len(smiles)} SMILES",
-        data={"results": results, "failures": failures},
-        error_type="invalid_smiles" if failures else None,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. generate_3d_structure
-# ---------------------------------------------------------------------------
-
-def generate_3d_structure(workspace: Path, smiles: str, name: str = "molecule") -> ToolResult:
-    try:
-        from rdkit import Chem
-        from rdkit.Chem import AllChem
-    except ImportError:
-        return _missing("rdkit")
-
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return ToolResult(status="failed", summary=f"invalid SMILES: {smiles}",
-                          retryable=False, error_type="invalid_smiles")
-    mol = Chem.AddHs(mol)
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 42
-    if AllChem.EmbedMolecule(mol, params) != 0:
-        return ToolResult(status="failed", summary=f"3D embedding failed for {smiles}",
-                          retryable=True, error_type="embedding_failed")
-    try:
-        AllChem.MMFFOptimizeMolecule(mol)
-    except Exception:
-        AllChem.UFFOptimizeMolecule(mol)
-
-    conf = mol.GetConformer()
-    lines = [str(mol.GetNumAtoms()), smiles]
-    atoms = []
-    for atom in mol.GetAtoms():
-        pos = conf.GetAtomPosition(atom.GetIdx())
-        atoms.append((atom.GetSymbol(), pos.x, pos.y, pos.z))
-        lines.append(f"{atom.GetSymbol()} {pos.x:.6f} {pos.y:.6f} {pos.z:.6f}")
-    xyz_path = workspace / f"{name}.xyz"
-    xyz_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    return ToolResult(
-        status="success",
-        summary=f"3D structure written to {xyz_path.name} ({mol.GetNumAtoms()} atoms)",
-        data={"xyz_path": str(xyz_path),
-              "atoms": [{"symbol": s, "x": x, "y": y, "z": z} for s, x, y, z in atoms]},
-        artifacts=[_artifact(xyz_path)],
-    )
-
-
-# ---------------------------------------------------------------------------
-# 4. calculate_rdkit_descriptors
-# ---------------------------------------------------------------------------
-
-def calculate_rdkit_descriptors(
-    workspace: Path, smiles: list[str], output_csv: str = "rdkit_descriptors.csv"
-) -> ToolResult:
-    try:
-        from rdkit import Chem
-        from rdkit.Chem import Crippen, Descriptors, rdMolDescriptors
-    except ImportError:
-        return _missing("rdkit")
-
-    rows, failures = [], []
-    for smi in smiles:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            failures.append(smi)
-            continue
-        rows.append({
-            "smiles": smi,
-            "mol_weight": Descriptors.MolWt(mol),
-            "logp": Crippen.MolLogP(mol),
-            "tpsa": rdMolDescriptors.CalcTPSA(mol),
-            "n_heavy_atoms": mol.GetNumHeavyAtoms(),
-            "n_rings": rdMolDescriptors.CalcNumRings(mol),
-            "n_hbd": rdMolDescriptors.CalcNumHBD(mol),
-            "n_hba": rdMolDescriptors.CalcNumHBA(mol),
-            "n_rotatable": rdMolDescriptors.CalcNumRotatableBonds(mol),
-            "n_aromatic_rings": rdMolDescriptors.CalcNumAromaticRings(mol),
-        })
-
-    if not rows:
-        return ToolResult(status="failed", summary="no valid SMILES",
-                          data={"failures": failures}, error_type="invalid_smiles")
-
-    import csv as _csv
-    out = workspace / output_csv
-    with out.open("w", newline="", encoding="utf-8") as fp:
-        writer = _csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-
-    return ToolResult(
-        status="success" if not failures else "partial",
-        summary=f"descriptors for {len(rows)}/{len(smiles)} molecules → {out.name}",
-        data={"output_csv": str(out), "failures": failures},
-        artifacts=[_artifact(out)],
-    )
-
-
-# ---------------------------------------------------------------------------
-# 5. cross_validate_model
-# ---------------------------------------------------------------------------
-
-def cross_validate_model(
-    workspace: Path,
-    features_csv: str,
-    target_column: str,
-    model: str = "random_forest",
-    n_folds: int = 5,
-    drop_columns: list[str] | None = None,
-) -> ToolResult:
-    try:
-        import numpy as np
-        import pandas as pd
-        from sklearn.ensemble import RandomForestRegressor
-        from sklearn.linear_model import Ridge
-        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-        from sklearn.model_selection import KFold
-    except ImportError:
-        return _missing("scikit-learn")
-
-    f = _resolve_input(workspace, features_csv)
-    if not f.exists():
-        return ToolResult(status="failed", summary=f"features file not found: {features_csv}",
-                          error_type="input_not_found")
-    df = pd.read_csv(f)
-    if target_column not in df.columns:
-        return ToolResult(status="failed",
-                          summary=f"target column `{target_column}` not in {list(df.columns)}",
-                          error_type="invalid_input")
-
-    drop = set(drop_columns or []) | {target_column}
-    X = df.drop(columns=[c for c in drop if c in df.columns]).select_dtypes("number")
-    y = df[target_column].to_numpy()
-    if X.shape[1] == 0:
-        return ToolResult(status="failed", summary="no numeric feature columns remain",
-                          error_type="invalid_input")
-    mask = ~(X.isna().any(axis=1) | pd.isna(y))
-    X, y = X[mask].to_numpy(), y[mask]
-    if len(y) < n_folds:
-        return ToolResult(status="failed",
-                          summary=f"only {len(y)} usable rows (< {n_folds} folds)",
-                          error_type="insufficient_data")
-
-    est = (Ridge() if model == "ridge"
-           else RandomForestRegressor(n_estimators=300, random_state=42))
-    oof = np.zeros_like(y, dtype=float)
-    for train_idx, test_idx in KFold(n_splits=n_folds, shuffle=True, random_state=42).split(X):
-        est.fit(X[train_idx], y[train_idx])
-        oof[test_idx] = est.predict(X[test_idx])
-
-    metrics = {
-        "model": model,
-        "n_folds": n_folds,
-        "n_samples": int(len(y)),
-        "n_features": int(X.shape[1]),
-        "r2": float(r2_score(y, oof)),
-        "rmse": float(np.sqrt(mean_squared_error(y, oof))),
-        "mae": float(mean_absolute_error(y, oof)),
-    }
-    metrics_path = workspace / "cv_metrics.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-
-    pred_path = workspace / "oof_predictions.csv"
-    pd.DataFrame({"y_true": y, "y_pred": oof}).to_csv(pred_path, index=False)
-
-    artifacts = [_artifact(metrics_path), _artifact(pred_path)]
-    plot_path = workspace / "true_vs_pred.png"
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.scatter(y, oof, alpha=0.7)
-        lims = [min(y.min(), oof.min()), max(y.max(), oof.max())]
-        ax.plot(lims, lims, "k--", linewidth=1)
-        ax.set_xlabel("true")
-        ax.set_ylabel("predicted")
-        ax.set_title(f"{model} CV: R2={metrics['r2']:.3f}, RMSE={metrics['rmse']:.3g}")
-        fig.tight_layout()
-        fig.savefig(plot_path, dpi=150)
-        plt.close(fig)
-        artifacts.append(_artifact(plot_path))
-    except ImportError:
-        pass
-
-    return ToolResult(
-        status="success",
-        summary=f"{n_folds}-fold CV: R2={metrics['r2']:.3f}, RMSE={metrics['rmse']:.3g}",
-        data=metrics,
-        artifacts=artifacts,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 6. inspect_artifact
+# 1. inspect_artifact
 # ---------------------------------------------------------------------------
 
 def inspect_artifact(workspace: Path, path: str, max_bytes: int = 4000) -> ToolResult:
@@ -319,7 +65,7 @@ def inspect_artifact(workspace: Path, path: str, max_bytes: int = 4000) -> ToolR
 
 
 # ---------------------------------------------------------------------------
-# 7. run_python_sandbox  (registry.py で policy + sandbox を束縛して構築)
+# 2. run_python_sandbox  (registry.py で policy + sandbox を束縛して構築)
 # ---------------------------------------------------------------------------
 
 def run_python_sandbox(workspace: Path, code: str, *, sandbox, policy) -> ToolResult:
@@ -356,7 +102,7 @@ def run_python_sandbox(workspace: Path, code: str, *, sandbox, policy) -> ToolRe
 
 
 # ---------------------------------------------------------------------------
-# 8. verify_scientific_result
+# 3. verify_scientific_result
 # ---------------------------------------------------------------------------
 
 def verify_scientific_result(workspace: Path, task_type: str = "generic",
@@ -376,7 +122,7 @@ def verify_scientific_result(workspace: Path, task_type: str = "generic",
 
 
 # ---------------------------------------------------------------------------
-# 9. search_official_documentation
+# 4. search_official_documentation
 # ---------------------------------------------------------------------------
 
 def search_official_documentation(workspace: Path, query: str, max_results: int = 5) -> ToolResult:

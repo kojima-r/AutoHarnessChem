@@ -6,6 +6,7 @@ runtime_fallback 設定に従って別プロバイダへ切り替える。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 from typing import Any
@@ -86,6 +87,15 @@ class BaseAdapter(ABC):
         for artifact in result.artifacts:
             self.tracer.emit("artifact", actor=self.name, payload=artifact.model_dump())
         return result
+
+    async def call_tool_async(self, name: str, arguments: dict[str, Any]) -> ToolResult:
+        """ツールを別スレッドで実行する。
+
+        共通ツールは subprocess を待つ同期処理なので、そのまま呼ぶとイベントループを
+        塞いでしまい、controller の実時間上限（延長の確認）が計算終了まで効かない。
+        スレッドへ出すことで、長い計算中でも上限のチェックとキャンセルが機能する。
+        """
+        return await asyncio.to_thread(self.call_tool, name, arguments)
 
     def tool_result_json(self, result: ToolResult) -> str:
         return json.dumps(result.model_dump(), ensure_ascii=False, default=str)

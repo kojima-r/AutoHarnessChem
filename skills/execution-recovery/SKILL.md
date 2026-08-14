@@ -1,7 +1,7 @@
 ---
 name: execution-recovery
 description: Classify execution failures and choose the right recovery — retry, lighten computation, or report as unfixable.
-version: 1.1.0
+version: 1.2.0
 risk_level: low
 required_tools:
   - run_python_sandbox
@@ -19,10 +19,11 @@ task_types: []
 | error_type | 対応 |
 |---|---|
 | missing_dependency | 修復不能。環境へのインストールが必要な旨を報告する（代替ライブラリで書き換え可能なら1回だけ試す）。構造最適化の geomeTRIC 欠落なら `use_geom_opt=false` で回避できる。 |
-| missing_environment | ツール専用の conda 環境が無い。修復不能として報告する（別ツールでの代替を提案してよい）。 |
+| missing_environment | ツール専用の conda 環境 / docker image が使えない。**修復不能として報告する**（`conda run` や `docker run` を Bash で手動実行して回避しない）。別ツールでの代替は提案してよい。 |
 | model_unavailable | 学習済みモデル/データが未配置。修復不能として報告し、必要な準備コマンドを伝える。 |
 | timeout | 計算を軽くする（基底縮小・分子分割・反復回数減・状態数減）。専用環境ツールは `timeout_sec` を明示的に上げられるので、軽量化で足りない場合はそれを使う。 |
-| out_of_memory | 入力を分割し、基底関数・状態数・分子数を減らす。ツールが `memory_limit_mb` を持つ場合のみ上げてよい。 |
+| timeout + status=partial | **完了分は成果物として保存済み**（`interrupted=true`）。`data.pending` に残りの入力が入っているので、それだけを（分割して）呼び直す。すべてやり直さない。 |
+| out_of_memory | メモリ上限（SIGKILL / SIGSEGV）。量子化学ツールは `memory_limit_mb` を持つので上げてよい（既定 16384MB）。あわせて入力を分割し、基底関数・状態数・分子数・スレッド数を減らす。C 拡張は確保失敗を検査せず SIGSEGV になるため、原因不明のクラッシュもまずメモリ上限を疑う。 |
 | policy_violation | ブロックされた操作を使わない実装に書き換える。回避目的の難読化はしない。 |
 | invalid_smiles / embedding_failed | 該当分子を除外して続行し、除外リストを報告する。 |
 | invalid_input | 引数の形（基底関数・charge/spin・原子インデックス・骨格のダミー原子）を直して1回だけ再試行する。 |
