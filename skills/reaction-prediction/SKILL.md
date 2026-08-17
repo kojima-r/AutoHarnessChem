@@ -1,7 +1,7 @@
 ---
 name: reaction-prediction
 description: Predict reaction yield, products (forward), or single-step precursors (retrosynthesis) with pretrained ReactionT5v2 models.
-version: 1.1.0
+version: 1.2.0
 risk_level: medium
 required_tools:
   - predict_reaction_t5
@@ -51,5 +51,11 @@ task_types:
 
 - error_type=missing_environment: conda 環境 `reactiont5` が無い。修復不能として報告する。
 - error_type=model_unavailable: HuggingFace キャッシュ/ネットワークの問題。修復不能として報告する。
-- error_type=timeout: 入力を分割して複数回に分けて呼び出す。
+- error_type=timeout: `status=partial` なら完了分は CSV に残っているので、
+  `data.pending` の反応だけを分割して呼び直す（すべてやり直さない）。
+  1 件も終わっていなければ `timeout_sec` を上げるか入力を分割する。
+- error_type=out_of_memory（OpenBLAS の確保エラー / SIGKILL）: torch と transformers は
+  import だけでコア数分のアドレス空間を要求する。`memory_limit_mb` を上げる
+  （既定 16384 → 32768）。入力を減らしても直らない種類の失敗なので、分割から先に
+  試さないこと。
 - 範囲外の yield / 無効な SMILES 出力: 入力文字列の形式（接頭辞・`.` 連結・正準化）を見直して1回だけ再試行する。

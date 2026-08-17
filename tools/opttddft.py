@@ -26,9 +26,11 @@ from tools.envrun import EnvScript, artifact, run_env_script
 # tools/OptTDDFT — editable install が無い環境でも import できるよう sys.path へ渡す
 OPT_TDDFT_ROOT = Path(__file__).resolve().parent / "OptTDDFT"
 
-# 量子化学計算の既定メモリ上限（MB）。sandbox 既定の 4096 では、実用的な TDDFT
-# （例 CAM-B3LYP/6-31G(d) のクマリン）がアドレス空間不足で SIGSEGV になる
-DEFAULT_MEMORY_LIMIT_MB = 16384
+# 量子化学計算の既定メモリ上限（MB）。実用的な TDDFT（例 CAM-B3LYP/6-31G(d) の
+# クマリン）は 4096 では SIGSEGV になり、置換基を付けた誘導体では 16384 でも
+# 足りないことが実測されている（run-5956e69a1dd4）。既定を広く取り、それでも
+# 落ちる場合は呼び出し側で更に上げる
+DEFAULT_MEMORY_LIMIT_MB = 32768
 
 # geomeTRIC は構造最適化（use_geom_opt / ESIPT の拘束付き最適化）でのみ必要。
 # 該当する呼び出しは named_envs["esipt"]（既定 conda env pyscf_esipt）で実行される

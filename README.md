@@ -343,6 +343,13 @@ CC(=O)OC(C)=O.Nc1ccc(O)cc1>>CC(=O)Nc1ccc(O)cc1   アセチル化（`>` を含め
 
 各ツールは失敗時に `error_type`（`timeout` / `missing_dependency` / `missing_environment` / `out_of_memory` / `scf_failed` / `no_valid_trial` / `model_unavailable` / `no_route_found` 等）と `retryable` を返し、これがエージェントの回復判断と Evolver の分析に使われます。
 
+専用環境で動く重いツール（量子化学 / ReactionT5 / AiZynthFinder / RDKit 系）はすべて
+`tools/envrun.py` 経由で実行されるため、**`timeout_sec` と `memory_limit_mb` を呼び出しごとに
+指定**でき、打ち切られても**1 件ごとの途中結果**を `status="partial"` + `data.pending` で返します。
+メモリ上限の既定はツールごとに異なります（量子化学 32768MB / 逆合成 24576MB /
+ReactionT5・RDKit 系 16384MB / sandbox 全体 16384MB）。torch や RDKit は import だけで
+コア数に比例したアドレス空間を要求するため、上限が小さいと計算に入る前に落ちます。
+
 ### 量子化学エンジン（OptTDDFT）
 
 量子化学系のツールは `tools/OptTDDFT`（`opt_tddft` パッケージ）を実体とし、harness 本体の
@@ -356,9 +363,11 @@ PCM 溶媒・Optuna 探索・レポート生成をそのまま再利用します
 - 各ツールは `timeout_sec` を個別に指定できます（既定は sandbox の `timeout_sec`）。
   TDDFT や Optuna 探索は既定の 600s では終わらないことが多いため、ここを上げて使います。
 - `threads`（既定 4）で PySCF のスレッド数を制限します（全コア占有の防止）。
-- `memory_limit_mb`（既定 16384）でメモリ上限を指定します。**sandbox 既定の 4096MB では
-  実用的な TDDFT（例 CAM-B3LYP/6-31G(d) のクマリン）がアドレス空間不足で SIGSEGV になります**
-  — この場合ツールは `error_type=out_of_memory` として上限を上げる案内を返します。
+- `memory_limit_mb`（量子化学ツールの既定 32768）でメモリ上限を指定します。local sandbox では
+  これが **アドレス空間 (RLIMIT_AS)** になり、実メモリ使用量が小さくても不足すると
+  C 拡張が確保失敗を検査せず SIGSEGV になります（例: 置換基付きクマリンの
+  CAM-B3LYP/6-31G(d) TDDFT は 16384MB でも落ちる実測例あり）— この場合ツールは
+  `error_type=out_of_memory` として上限を上げる案内を返します。
 - 重いツールは**1 件ごとに CSV と途中結果を保存**し、打ち切られても完了分を
   `status="partial"` + `data.pending`（未処理の入力）として返します。
 - 同じ CSV を指定して**複数回呼ぶと結果は累積**されます（同じ `(smiles, method, basis)`
@@ -481,7 +490,7 @@ proposer は2段階で提案します:
 | `runtime.on_attempt_timeout` | 上限到達時の動作（`ask` = ユーザに確認して延長 / `extend` = 自動延長 / `stop` = 打ち切り） |
 | `runtime.timeout_extension_sec` | 1回の延長で足す秒数（既定 3600） |
 | `runtime.max_timeout_extensions` | 延長回数の上限（空 = 無制限） |
-| `runtime.sandbox` | `type`(docker/local)・`conda_env`・timeout・リソース制限・`named_envs` |
+| `runtime.sandbox` | `type`(docker/local)・`conda_env`・timeout・リソース制限（`memory_limit_mb` 既定 16384）・`named_envs` |
 | `routing` | `task_type` → provider の対応（ベンチマーク実測から更新可能）+ `fallback` |
 | `mode` | `development` / `production`（本番は自己改善を強制無効化） |
 | `self_improvement` | Evolver の有効/無効 |

@@ -16,24 +16,24 @@
     "sha256": "cbbd7cc1616be155983c10d3c41ef3fd442101d959a1fff76a4a3adfe9a1deb6"
   },
   "execution-recovery": {
-    "version": "1.2.0",
-    "sha256": "30a7e2ef853ddfbc6f715569304d352aa8b5ecd38f7be3bcb07bfbe15a4a31aa"
+    "version": "1.2.1",
+    "sha256": "4f127c374d574b62efe1074e3f749efe6477c4d22b544a71635a8c886efea03a"
   },
   "molecular-regression": {
     "version": "1.0.0",
     "sha256": "6bccfa8f48bb7b02b9c2f9ff61bf37dcc6a0ff33cfee2fbf9be987dec42d4963"
   },
   "pyscf-orbitals": {
-    "version": "2.2.0",
-    "sha256": "29fe0dd9b46cea14b57fde0c0da178ee9b73319511aa7e9ea581310077a6ac4a"
+    "version": "2.2.1",
+    "sha256": "2b1eaa519e3f7e84095a360519233783550bf50a2b9c21f60f62f889c667a8f8"
   },
   "rdkit-preparation": {
     "version": "1.1.0",
     "sha256": "b03acc1b315c6eda3ff956a801da5027f56a48af5ba6f28e84a9844c74ec8590"
   },
   "reaction-prediction": {
-    "version": "1.1.0",
-    "sha256": "39b65033f724d52431c6c8237845be6db6d54ced40f46cfbc30f194b41c31218"
+    "version": "1.2.0",
+    "sha256": "8b6bb12a211e0c3dc9b5af81730a99fe64e03a89a8d2372827dc2b6ddf05a446"
   },
   "result-reporting": {
     "version": "2.0.0",

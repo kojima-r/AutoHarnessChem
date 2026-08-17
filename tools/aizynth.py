@@ -30,6 +30,10 @@ _CONFIG_FALLBACK_DIRS = (
     Path.home() / ".aizynthfinder",
 )
 
+# 既定メモリ上限（MB）。stock DB（zinc_stock.hdf5 は ~650MB）と onnxruntime を
+# 載せるため、sandbox 既定では足りない
+DEFAULT_MEMORY_LIMIT_MB = 24576
+
 _DOWNLOAD_HINT = (
     "学習済みモデルが見つかりません。次のコマンドで公開データ（USPTO expansion "
     "policy + ZINC stock）を取得し、config.yml の場所を AIZYNTH_CONFIG に設定して"
@@ -279,7 +283,7 @@ def plan_retrosynthesis(
     output_json: str = "retrosynthesis_routes.json",
     output_csv: str = "retrosynthesis_routes.csv",
     timeout_sec: int | None = None,
-    memory_limit_mb: int = 16384,
+    memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     *,
     sandbox,
 ) -> ToolResult:
@@ -324,8 +328,6 @@ def plan_retrosynthesis(
     }
     # 各 target が time_limit まで探索しうるので、全体の上限はその合計 + 余裕
     default_timeout = len(targets) * (int(time_limit_sec) + 120) + 180
-    # stock DB（zinc_stock.hdf5 は ~650MB）と onnxruntime を載せるため、既定の
-    # メモリ上限（4GB）では足りない
     run = run_env_script(
         sandbox, workspace, SCRIPT, spec,
         timeout_sec=timeout_sec or default_timeout,

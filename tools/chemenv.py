@@ -24,9 +24,10 @@ from tools.envrun import EnvScript, artifact, run_env_script
 
 ENV_NAME = "rdkit"
 
-# 既定メモリ上限（MB）。sandbox 既定の 4096 では rdkit / pandas / scikit-learn /
-# matplotlib の import だけでアドレス空間が足りず SIGKILL される
-DEFAULT_MEMORY_LIMIT_MB = 8192
+# 既定メモリ上限（MB）。rdkit / pandas / scikit-learn / matplotlib の import だけでも
+# 4096 ではアドレス空間が足りず SIGKILL される。8192 でも大きめのデータや
+# コア数の多いマシンでは足りないので、余裕を持たせる
+DEFAULT_MEMORY_LIMIT_MB = 16384
 
 _MISSING_HINTS = (
     (r"No module named 'rdkit'", "missing_dependency", False,

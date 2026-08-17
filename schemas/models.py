@@ -99,7 +99,11 @@ class SandboxConfig(BaseModel):
     conda_env: str | None = "pyscf"  # local sandbox 用。None なら現在の python を使う
     timeout_sec: int = 600
     cpu_limit_sec: int = 300
-    memory_limit_mb: int = 4096
+    # local sandbox ではこれが RLIMIT_AS（アドレス空間）になる。実メモリ使用量が
+    # 小さくても、科学計算ライブラリは import 時点でコア数に比例した領域を確保する
+    # ため、小さすぎると SIGSEGV / OpenBLAS の確保エラーで落ちる（4096 では rdkit や
+    # torch の import すら通らない）。ツールごとの既定は各 tools/*.py で更に上げる
+    memory_limit_mb: int = 16384
     network: Literal["none", "bridge"] = "none"
     # ツール専用の実行環境。依存が競合するツール（例: ReactionT5 の torch/transformers、
     # AiZynthFinder の ONNX ランタイム）を既定環境から分離する。

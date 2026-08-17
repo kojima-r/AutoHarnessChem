@@ -16,7 +16,10 @@ runtime:
     conda_env: pyscf          # local sandbox が使う conda 環境
     timeout_sec: 600
     cpu_limit_sec: 300
-    memory_limit_mb: 4096
+    # local sandbox では RLIMIT_AS（アドレス空間）。rdkit / torch は import だけで
+    # コア数に比例した領域を要求するので、小さいと SIGSEGV や OpenBLAS の
+    # 確保エラーになる。重いツールは各自の memory_limit_mb で更に上げる
+    memory_limit_mb: 16384
     network: none
     # ツール専用環境（依存が競合するツールを既定環境から分離する）
     named_envs:

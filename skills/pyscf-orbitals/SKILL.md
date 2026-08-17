@@ -1,7 +1,7 @@
 ---
 name: pyscf-orbitals
 description: Calculate molecular orbital energies (HOMO/LUMO) and TDDFT absorption spectra with OptTDDFT (RDKit + PySCF).
-version: 2.2.0
+version: 2.2.1
 risk_level: medium
 required_tools:
   - calculate_orbitals
@@ -42,7 +42,7 @@ subprocess として実行される。3D 構造生成（多コンフォマー探
    - **実測の目安**（4 スレッド）: クマリン（C9H6O2）の TDDFT は
      b3lyp/sto-3g で約 10 秒、CAMB3LYP/6-31g(d) で **約 9 分・メモリ 4GB 超**。
      高精度条件を使うときは `timeout_sec` を 900 以上、`memory_limit_mb` を
-     既定（16384）以上にし、分子は 1 件ずつ投げる。
+     既定（32768）以上にし、分子は 1 件ずつ投げる。
 3. **電荷・スピンは分子に合わせて明示する**（例: SO4 は `charge=-2`, `spin=0`）。
    `RuntimeError: Electron number ... and spin ...` は charge/spin 不整合のサイン。
    `spin`（= 2S, 不対電子数）が 0 以外なら UHF/UKS で計算される。
@@ -73,9 +73,10 @@ subprocess として実行される。3D 構造生成（多コンフォマー探
 - **error_type=invalid_input で基底関数が無いと言われた**: Br/I などの重元素は
   `6-31g(d)` に含まれない。`basis="def2-svp"` に変更する。
 - **error_type=out_of_memory（SIGSEGV / 強制終了）**: メモリ上限が主因。
-  `memory_limit_mb` を上げる（例 16384 → 32768）、基底関数を下げる（`6-31g(d)` →
+  `memory_limit_mb` を上げる（例 32768 → 65536）、基底関数を下げる（`6-31g(d)` →
   `sto-3g`）、`nstates` を減らす、`threads` を減らす、の順に試す。
-  4096MB のような小さい上限では CAMB3LYP/6-31g(d) の TDDFT は SIGSEGV で落ちる。
+  置換基を付けた誘導体の CAMB3LYP/6-31g(d) TDDFT は 16384MB でも SIGSEGV になる
+  実測例がある（必要なのは実メモリではなくアドレス空間）。
 - **error_type=missing_dependency で geometric が無い**: `use_geom_opt=false` にする
   （構造最適化なしでも計算できる）。環境へのインストールは agent 側では不可。
 - **error_type=missing_environment**: conda 環境 `pyscf` / docker image が使えない。

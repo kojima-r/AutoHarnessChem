@@ -311,7 +311,9 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "'forward'=生成物予測, 'retrosynthesis'=逆合成（前駆体予測）。"
             "入力形式 — yield: 'REACTANT:...REAGENT:...PRODUCT:...', "
             "forward: 'REACTANT:...REAGENT:...', retrosynthesis: 生成物SMILESのみ。"
-            "結果は reactiont5_predictions.csv に保存される。専用conda環境(reactiont5)で実行。"
+            "結果は reactiont5_predictions.csv に保存される（1 反応ごとに途中結果を"
+            "残すので、打ち切られても完了分は status='partial' + data.pending で返る）。"
+            "専用conda環境(reactiont5)で実行。"
         ),
         parameters=_schema({
             "reactions": {"type": "array", "items": {"type": "string"},
@@ -321,6 +323,13 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "num_beams": {"type": "integer", "default": 1,
                           "description": "forward/retrosynthesis のビーム幅（候補数）"},
             "output_csv": {"type": "string", "default": "reactiont5_predictions.csv"},
+            "timeout_sec": timeout,
+            "memory_limit_mb": {"type": "integer",
+                                "default": reactiont5.DEFAULT_MEMORY_LIMIT_MB,
+                                "description": ("メモリ上限 (MB)。torch/transformers は "
+                                                "import だけでコア数分のアドレス空間を"
+                                                "要求するため、不足すると OpenBLAS の"
+                                                "確保エラーで落ちる")},
         }, ["reactions", "task"]),
         func=lambda **kw: reactiont5.predict_reaction_t5(workspace, sandbox=t5_sandbox, **kw),
         risk_level="medium",
@@ -358,7 +367,8 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "config_yaml": {"type": "string",
                             "description": "AiZynthFinder の config.yml（既定: AIZYNTH_CONFIG 等から自動解決）"},
             "timeout_sec": {"type": "integer"},
-            "memory_limit_mb": {"type": "integer", "default": 16384,
+            "memory_limit_mb": {"type": "integer",
+                                "default": aizynth.DEFAULT_MEMORY_LIMIT_MB,
                                 "description": "stock DB と ONNX を載せるためのメモリ上限"},
         }, ["targets"]),
         func=lambda **kw: aizynth.plan_retrosynthesis(
