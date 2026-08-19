@@ -279,8 +279,10 @@ bash examples/run_examples.sh pyscf   # CLI を使わない同等の実行
 
 - **タスク投稿** — リクエスト文・provider・task_type・期待出力を指定して実行。入力ファイル（CSV 等）はブラウザからアップロードすると workspace へコピーされる。
 - **構造アシスト（プロンプト入力の補助）** — SMILES を入れるとその場で構造を描画して妥当性を確認でき、プリセット分子とタスクテンプレートからプロンプト・task_type・期待出力を一括で作れる。詳細は下記。
-- **ラン監視** — 実行中は正規化イベント（`AgentEvent`）を自動ポーリングでライブ表示。CLI と同じ粒度でフェーズ（試行 N/M・検証合否）やツール呼び出しが見える。
-- **成果物閲覧** — 画像はインライン表示、`report_user.html` は埋め込み表示、その他はダウンロードリンク。成果物 CSV の SMILES は構造式として描画される。
+- **ラン詳細（既定の表示）** — 「**ユーザからの入力**」（リクエスト文 + task_type・期待出力・入力ファイル）と「**ユーザ向け報告**」（`report_user.html` の埋め込み。無ければ `report_user.md` → エージェントの最終メッセージ）だけを最初から表示します。
+- **その他はトグル（既定で閉じる）** — 検証結果・構造・イベント（trace）・成果物・`report.md` は見出しをクリックして開きます。見出しには件数が出るので、開かずに規模が分かります。開いた状態は自動ポーリングによる再描画をまたいで保持されます。
+- **ラン監視** — 実行中は正規化イベント（`AgentEvent`）を自動ポーリングで取得。イベントのトグルを開けば、CLI と同じ粒度でフェーズ（試行 N/M・検証合否）やツール呼び出しがライブで見えます。
+- **成果物閲覧** — 画像はインライン表示、その他はダウンロードリンク。成果物 CSV の SMILES は構造式として描画される。
 - **REST API** — `/api/*`（OpenAPI ドキュメントは `/docs`）。タスクはバックグラウンド実行され、`POST /api/tasks` は即座に `run_id` を返す。
 
 ---
@@ -346,9 +348,13 @@ CC(=O)OC(C)=O.Nc1ccc(O)cc1>>CC(=O)Nc1ccc(O)cc1   アセチル化（`>` を含め
 専用環境で動く重いツール（量子化学 / ReactionT5 / AiZynthFinder / RDKit 系）はすべて
 `tools/envrun.py` 経由で実行されるため、**`timeout_sec` と `memory_limit_mb` を呼び出しごとに
 指定**でき、打ち切られても**1 件ごとの途中結果**を `status="partial"` + `data.pending` で返します。
-メモリ上限の既定はツールごとに異なります（量子化学 32768MB / 逆合成 24576MB /
-ReactionT5・RDKit 系 16384MB / sandbox 全体 16384MB）。torch や RDKit は import だけで
-コア数に比例したアドレス空間を要求するため、上限が小さいと計算に入る前に落ちます。
+メモリ上限の既定はツールごとに異なります（ReactionT5 65536MB / 量子化学 32768MB /
+逆合成 24576MB / RDKit 系 16384MB / sandbox 全体 16384MB）。local sandbox ではこれが
+**アドレス空間 (RLIMIT_AS)** であり、torch や RDKit は import だけでコア数に比例した
+領域を要求するため、上限が小さいと計算に入る前に落ちます。とくに **GPU を使う
+ReactionT5 は CUDA の初期化でホスト側の広いアドレス空間を予約する**ため、VRAM が
+空いていても上限が足りないと `CUDA error: out of memory` になります（実測では 49152MB
+未満で失敗）。この失敗は `error_type=out_of_memory` として上限の上げ方を返します。
 
 ### 量子化学エンジン（OptTDDFT）
 
@@ -450,6 +456,27 @@ harness 本体のプロセスに pyscf も torch も aizynthfinder も不要で�
 全 SDK のイベントは `AgentEvent`（`run_id` / `event_type` / `actor` / `payload` / `timestamp`）に正規化され、`traces/<run_id>.jsonl` に追記されます。`event_type` は `reasoning_summary` / `tool_call` / `tool_result` / `delegation` / `artifact` / `error` / `final`。
 
 このイベント列が、CLI の逐次表示・Web のライブ表示・Evolver の失敗分析という**3つの用途で共有**されます。`TraceWriter.subscribe()` にリスナーを登録すると、記録と同時に受け取れます。
+
+### 失敗の詳細（tool_errors.jsonl）
+
+trace の `tool_result` には要約（`summary` / `error_type`）しか載らないため、**失敗した
+ツール呼び出しの全文は `workspaces/<run_id>/tool_errors.jsonl` に残します**（`ToolRegistry`
+が成功以外の呼び出しを 1 行 1 件で追記）。1 エントリの内容:
+
+| キー | 内容 |
+|---|---|
+| `at` / `tool` / `status` / `error_type` / `retryable` | いつ・どのツールが・どう失敗したか |
+| `summary` | エージェントへ返した要約（回復手順を含む） |
+| `arguments` | 呼び出し引数（再現用。長い値は切り詰め） |
+| `data` | ツールが返した `stdout` / `stderr` / `traceback` / `pending` など |
+
+trace 側にも `stderr_tail`（末尾数行）と `error_log` を載せるので、CLI では
+`✘ predict_reaction_t5 [failed] … | stderr: … → tool_errors.jsonl` のように 1 行で見え、
+Web UI ではその行から `tool_errors.jsonl` へのリンクが張られます。
+再計画時のエージェントも `inspect_artifact("tool_errors.jsonl")` で前の試行の失敗理由を
+読めます（`execution-recovery` Skill がそう指示します）。
+専用環境ツールは生成したスクリプトと入力 JSON（例 `_reactiont5_script.py` /
+`_reactiont5_input.json`）も workspace に残すので、同じ条件での再実行もできます。
 
 ---
 

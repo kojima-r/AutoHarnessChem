@@ -25,6 +25,23 @@
   .card { background: var(--card); border: 1px solid var(--border);
           border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
   .card h2 { font-size: .95rem; margin: 0 0 .8rem; }
+  /* 折りたたみセクション（既定で閉じる。開閉状態は再描画をまたいで保持） */
+  details.card > summary { font-size: .95rem; font-weight: 600; cursor: pointer;
+                          list-style: none; display: flex; align-items: baseline;
+                          gap: .4rem; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸"; color: var(--muted); font-size: .8rem; }
+  details.card[open] > summary::before { content: "▾"; }
+  details.card > summary:hover { color: var(--accent); }
+  details.card[open] > summary { margin-bottom: .8rem; }
+  details.card > summary .hint { font-weight: 400; margin-top: 0; }
+  /* ユーザからの入力 */
+  .request { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px;
+             padding: .7rem; white-space: pre-wrap; word-break: break-word;
+             font-size: .85rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: .2rem 1rem; margin-top: .5rem;
+          font-size: .78rem; color: var(--muted); }
+  .meta b { color: var(--text); font-weight: 600; }
   label { display: block; font-size: .78rem; color: var(--muted); margin: .6rem 0 .2rem; }
   textarea, input[type=text], select {
     width: 100%; padding: .45rem .6rem; border: 1px solid var(--border);
@@ -539,6 +556,12 @@ function traceLine(event) {
   } else if (event.event_type === "tool_result") {
     text = `${RESULT_MARKS[p.status] || "?"} ${p.tool} [${p.status}] ${p.summary || ""}`
       + (p.error_type ? ` (error_type=${p.error_type})` : "");
+    if (p.stderr_tail) {
+      // 全文は workspace の tool_errors.jsonl（成果物としてダウンロードできる）
+      const last = String(p.stderr_tail).trim().split("\n").pop().slice(0, 200);
+      return traceRow(event, `${text} | stderr: ${last}`,
+                      p.error_log || "tool_errors.jsonl");
+    }
   } else if (event.event_type === "artifact") {
     text = `⎘ ${p.path || ""} (${p.bytes ?? "?"}B)`;
   } else if (p.phase === "start") {
@@ -563,10 +586,75 @@ function traceLine(event) {
     text = p.text || p.error || p.path || JSON.stringify(p);
   }
   if (typeof text !== "string") text = JSON.stringify(text);
+  return traceRow(event, text);
+}
+
+/** trace の 1 行。errorLog を渡すと、その成果物へのリンクを添える。 */
+function traceRow(event, text, errorLog) {
   const stamp = event.timestamp ? new Date(event.timestamp).toLocaleTimeString("ja-JP") : "";
+  const link = errorLog
+    ? ` <a href="/api/runs/${encodeURIComponent(selected)}/artifacts/${
+        encodeURIComponent(errorLog)}" target="_blank">${esc(errorLog)}</a>`
+    : "";
   return `<div class="ev"><span class="t t-${esc(event.event_type)}">${esc(event.event_type)}</span>
-          <span class="p"><b>${esc(event.actor)}</b> ${esc(String(text).slice(0, 500))}
+          <span class="p"><b>${esc(event.actor)}</b> ${esc(String(text).slice(0, 500))}${link}
           <span class="hint">${esc(stamp)}</span></span></div>`;
+}
+
+// 折りたたみセクションの開閉状態。ポーリングによる再描画をまたいで保持する
+const openSections = {};
+
+/** 既定で閉じているセクション（クリックで開く）。note は見出しの脇に出す件数など。 */
+function foldable(key, title, bodyHtml, note) {
+  return `<details class="card" data-section="${esc(key)}"${openSections[key] ? " open" : ""}>
+    <summary>${esc(title)}${note ? ` <span class="hint">${esc(note)}</span>` : ""}</summary>
+    ${bodyHtml}</details>`;
+}
+
+/** report.json / ledger.json のどちらかから TaskSpec を取り出す（実行中は ledger）。 */
+function taskOf(detail) {
+  return detail.report?.task || detail.ledger?.task || null;
+}
+
+/** ユーザが投げた内容（リクエスト文と付随する指定）。既定で表示する。 */
+function requestCard(detail) {
+  const task = taskOf(detail);
+  const request = task?.description || detail.description || "";
+  const files = (task?.inputs?.files || []).join(", ");
+  const expected = (task?.expected_outputs || []).join(", ");
+  const aspects = (task?.secondary_task_types || []).join(", ");
+  const meta = [
+    task?.task_type ? `task_type: <b>${esc(task.task_type)}</b>` : "",
+    aspects ? `他の側面: <b>${esc(aspects)}</b>` : "",
+    expected ? `期待する出力: <b>${esc(expected)}</b>` : "",
+    files ? `入力ファイル: <b>${esc(files)}</b>` : "",
+  ].filter(Boolean);
+  return `<div class="card">
+    <h2>ユーザからの入力</h2>
+    ${request ? `<div class="request">${esc(request)}</div>`
+              : '<div class="empty">リクエストを読み込めませんでした</div>'}
+    ${meta.length ? `<div class="meta">${meta.map(m => `<span>${m}</span>`).join("")}</div>` : ""}
+  </div>`;
+}
+
+/** ユーザ向け報告（report_user.html → report_user.md → final_message）。既定で表示する。 */
+function reportCard(detail, userHtml, userMd) {
+  let body;
+  if (userHtml) {
+    body = `<iframe class="report" src="${artifactUrl(userHtml)}"></iframe>
+      <div class="hint"><a href="${artifactUrl(userHtml)}" target="_blank">
+        別タブで開く (report_user.html)</a></div>`;
+  } else if (userMd) {
+    body = `<pre id="userMd">report_user.md を読み込み中…</pre>`;
+  } else if (detail.report?.final_message) {
+    body = `<pre>${esc(detail.report.final_message)}</pre>
+      <div class="hint">report_user.md / report_user.html は生成されていません
+        （エージェントの最終メッセージを表示しています）。</div>`;
+  } else {
+    body = `<div class="empty">ユーザ向け報告はまだありません${
+      detail.status === "running" ? "（実行中）" : ""}</div>`;
+  }
+  return `<div class="card"><h2>ユーザ向け報告</h2>${body}</div>`;
 }
 
 function renderDetail(detail, newEvents, reset) {
@@ -580,6 +668,9 @@ function renderDetail(detail, newEvents, reset) {
   const images = artifacts.filter(a => (a.mime || "").startsWith("image/"));
   const others = artifacts.filter(a => !(a.mime || "").startsWith("image/"));
   const userHtml = artifacts.find(a => relative(a.path) === "report_user.html");
+  const userMd = artifacts.find(a => relative(a.path) === "report_user.md");
+  const checks = verification ? (verification.requirements_missing || []).length
+    + (verification.scientific_warnings || []).length : 0;
 
   container.innerHTML = `
     ${timeoutCard(detail)}
@@ -588,31 +679,58 @@ function renderDetail(detail, newEvents, reset) {
         <span class="hint">provider=${esc(detail.provider || "?")}
         attempts=${esc(detail.report?.attempts ?? detail.attempts ?? "-")}</span></h2>
       ${detail.error ? `<pre>${esc(detail.error)}</pre>` : ""}
-      ${verification ? `
-        <ul class="checks">
-          ${(verification.requirements_satisfied || []).map(x => `<li class="ok">${esc(x)}</li>`).join("")}
-          ${(verification.requirements_missing || []).map(x => `<li class="miss">${esc(x)}</li>`).join("")}
-          ${(verification.scientific_warnings || []).map(x => `<li class="warn">${esc(x)}</li>`).join("")}
-        </ul>` : ""}
     </div>
-    <div class="card" id="structureCard" hidden><h2>構造（SMILES から描画）</h2>
-      <div id="structures"></div></div>
-    <div class="card"><h2>イベント（正規化 trace）</h2>
-      <div id="trace">${traceHtml || '<div class="empty">イベント待ち…</div>'}</div></div>
-    ${artifacts.length ? `
-    <div class="card"><h2>成果物</h2>
+    ${requestCard(detail)}
+    ${reportCard(detail, userHtml, userMd)}
+    ${verification ? foldable("verification", "検証結果", `
+      <ul class="checks">
+        ${(verification.requirements_satisfied || []).map(x => `<li class="ok">${esc(x)}</li>`).join("")}
+        ${(verification.requirements_missing || []).map(x => `<li class="miss">${esc(x)}</li>`).join("")}
+        ${(verification.scientific_warnings || []).map(x => `<li class="warn">${esc(x)}</li>`).join("")}
+      </ul>`, verification.passed
+        ? `合格${checks ? `（警告 ${checks} 件）` : ""}` : `不合格（要確認 ${checks} 件）`) : ""}
+    <details class="card" data-section="structures" id="structureCard" hidden${
+      openSections.structures ? " open" : ""}>
+      <summary>構造（SMILES から描画） <span class="hint" id="structureCount"></span></summary>
+      <div id="structures"></div></details>
+    ${foldable("trace", "イベント（正規化 trace）",
+               `<div id="trace">${traceHtml || '<div class="empty">イベント待ち…</div>'}</div>`,
+               traceEvents.length ? `${traceEvents.length} 件` : "")}
+    ${artifacts.length ? foldable("artifacts", "成果物", `
       <div class="gallery">${images.map(a => `
         <figure><a href="${artifactUrl(a)}" target="_blank"><img src="${artifactUrl(a)}"></a>
         <figcaption>${esc(relative(a.path))}</figcaption></figure>`).join("")}</div>
       <div class="filelist">${others.map(a =>
-        `<a href="${artifactUrl(a)}" target="_blank">${esc(relative(a.path))} (${a.bytes}B)</a>`).join("")}</div>
-    </div>` : ""}
-    ${userHtml ? `<div class="card"><h2>ユーザ向け報告 (report_user.html)</h2>
-      <iframe class="report" src="${artifactUrl(userHtml)}"></iframe></div>` : ""}
-    ${detail.report_md ? `<div class="card"><h2>Run report</h2>
-      <pre>${esc(detail.report_md)}</pre></div>` : ""}`;
-  const traceBox = $("trace");
-  if (traceBox) traceBox.scrollTop = traceBox.scrollHeight;
+        `<a href="${artifactUrl(a)}" target="_blank">${esc(relative(a.path))} (${a.bytes}B)</a>`).join("")}</div>`,
+      `${artifacts.length} 件`) : ""}
+    ${detail.report_md ? foldable("report_md", "Run report (report.md)",
+                                  `<pre>${esc(detail.report_md)}</pre>`) : ""}`;
+
+  container.querySelectorAll("details[data-section]").forEach((element) => {
+    element.addEventListener("toggle", () => {
+      openSections[element.dataset.section] = element.open;
+      if (element.dataset.section === "trace" && element.open) scrollTraceToEnd();
+    });
+  });
+  scrollTraceToEnd();
+  if (!userHtml && userMd) loadUserMarkdown(userMd);
+}
+
+/** trace は開いているときだけ末尾へ送る（閉じていると高さが 0 で意味がない）。 */
+function scrollTraceToEnd() {
+  const box = $("trace");
+  if (box && box.offsetParent !== null) box.scrollTop = box.scrollHeight;
+}
+
+/** report_user.html が無い場合に report_user.md をそのまま表示する。 */
+async function loadUserMarkdown(artifact) {
+  const box = $("userMd");
+  if (!box) return;
+  try {
+    const response = await fetch(artifactUrl(artifact));
+    box.textContent = response.ok ? await response.text()
+      : "report_user.md を読み込めませんでした";
+  } catch (e) { box.textContent = "report_user.md を読み込めませんでした: " + e.message; }
 }
 
 /** 実時間上限に達して判断待ちの run に、延長/打ち切りの選択肢を出す。 */
@@ -778,8 +896,14 @@ async function updateStructures(detail) {
     seen.add(item.smiles); return true;
   }).slice(0, 24);
 
-  if (!items.length) { card.hidden = true; box.innerHTML = ""; return; }
+  const counter = $("structureCount");
+  if (!items.length) {
+    card.hidden = true; box.innerHTML = "";
+    if (counter) counter.textContent = "";
+    return;
+  }
   card.hidden = false;
+  if (counter) counter.textContent = `${items.length} 件`;
   box.innerHTML = '<ul class="structures">' + items.map(item => `
     <li class="${item.smiles.includes(">") ? "reaction" : ""}">
       <svg data-smiles="${esc(item.smiles)}"></svg>
@@ -788,7 +912,9 @@ async function updateStructures(detail) {
       <div class="src">${esc(item.source)}</div></li>`).join("") + "</ul>";
   drawStructures(box, dropInvalid);
   setTimeout(() => {
-    if (!box.querySelector("li")) { card.hidden = true; box.innerHTML = ""; }
+    const drawn = box.querySelectorAll("li").length;
+    if (!drawn) { card.hidden = true; box.innerHTML = ""; }
+    if (counter) counter.textContent = drawn ? `${drawn} 件` : "";
   }, 0);
 }
 

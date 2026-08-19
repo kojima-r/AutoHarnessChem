@@ -6,14 +6,36 @@
 from __future__ import annotations
 
 import functools
+import json
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from schemas import SandboxConfig, ToolResult
+from schemas import SandboxConfig, ToolResult, utcnow
 from tools import aizynth, chem, chemenv, opttddft, reactiont5, report
 from tools.sandbox import create_sandbox
+
+# ツール失敗の詳細（stderr / stdout / traceback）を後から確認できるように残すログ。
+# trace（AgentEvent）には summary と error_type しか載らないため、原因調査には
+# こちらを読む。1 行 1 失敗の JSON Lines で workspace 直下へ追記する。
+ERROR_LOG_NAME = "tool_errors.jsonl"
+
+
+def _clip(value: Any, limit: int) -> str:
+    text = "" if value is None else str(value)
+    return text if len(text) <= limit else text[:limit] + "... [truncated]"
+
+
+def _loggable(value: Any, limit: int = 8000) -> Any:
+    """JSON にできる値はそのまま、長い文字列や巨大な構造は切り詰めて残す。"""
+    if isinstance(value, str):
+        return _clip(value, limit)
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return _clip(value, limit)
+    return value if len(text) <= limit else _clip(text, limit)
 
 
 @dataclass
@@ -26,8 +48,10 @@ class ToolSpec:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, error_log: Path | None = None) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        # 失敗の詳細を追記するファイル（None なら記録しない）
+        self.error_log = Path(error_log) if error_log is not None else None
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
@@ -45,18 +69,48 @@ class ToolRegistry:
     # generate_3d_structure(name=...) — を呼べるようにするため）
     def call(self, name: str, /, **kwargs: Any) -> ToolResult:
         if name not in self._tools:
-            return ToolResult(status="failed", summary=f"unknown tool: {name}",
-                              retryable=False, error_type="unknown_tool")
+            result = ToolResult(status="failed", summary=f"unknown tool: {name}",
+                                retryable=False, error_type="unknown_tool")
+        else:
+            try:
+                result = self._tools[name].func(**kwargs)
+            except Exception as e:
+                result = ToolResult(
+                    status="failed",
+                    summary=f"{type(e).__name__}: {e}",
+                    data={"traceback": traceback.format_exc()[-3000:]},
+                    retryable=True,
+                    error_type="tool_exception",
+                )
+        self.log_failure(name, kwargs, result)
+        return result
+
+    def log_failure(self, name: str, arguments: dict[str, Any], result: ToolResult) -> None:
+        """成功以外の呼び出しを error_log へ 1 行追記する（stderr をここに残す）。
+
+        ToolResult.data の stdout / stderr / traceback は agent には渡るが trace には
+        残らないため、後から原因を調べられるようにここで永続化する。
+        ログの失敗でツール実行を壊さないよう、例外は握りつぶす。
+        """
+        if (self.error_log is None or not isinstance(result, ToolResult)
+                or result.status == "success"):
+            return
+        entry = {
+            "at": utcnow().isoformat(),
+            "tool": name,
+            "status": result.status,
+            "error_type": result.error_type,
+            "retryable": result.retryable,
+            "summary": result.summary,
+            "arguments": {k: _loggable(v, 500) for k, v in arguments.items()},
+            "data": {k: _loggable(v) for k, v in result.data.items()},
+        }
         try:
-            return self._tools[name].func(**kwargs)
-        except Exception as e:
-            return ToolResult(
-                status="failed",
-                summary=f"{type(e).__name__}: {e}",
-                data={"traceback": traceback.format_exc()[-3000:]},
-                retryable=True,
-                error_type="tool_exception",
-            )
+            self.error_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.error_log.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            pass
 
 
 def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -67,7 +121,8 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
     """workspace / sandbox / policy を束縛した既定のツール群を構築する。"""
     workspace = Path(workspace)
     sandbox = create_sandbox(sandbox_config, workspace)
-    registry = ToolRegistry()
+    # 失敗の詳細（stderr 等）は workspace/tool_errors.jsonl に残す
+    registry = ToolRegistry(error_log=workspace / ERROR_LOG_NAME)
     bind = functools.partial
 
     smiles_list = {"type": "array", "items": {"type": "string"},
@@ -326,10 +381,11 @@ def build_default_registry(workspace: Path, sandbox_config: SandboxConfig, polic
             "timeout_sec": timeout,
             "memory_limit_mb": {"type": "integer",
                                 "default": reactiont5.DEFAULT_MEMORY_LIMIT_MB,
-                                "description": ("メモリ上限 (MB)。torch/transformers は "
-                                                "import だけでコア数分のアドレス空間を"
-                                                "要求するため、不足すると OpenBLAS の"
-                                                "確保エラーで落ちる")},
+                                "description": ("メモリ上限 (MB)。torch は import と "
+                                                "CUDA 初期化で大量のアドレス空間を要求"
+                                                "するため、不足すると OpenBLAS の確保"
+                                                "エラーや `CUDA error: out of memory` "
+                                                "で落ちる（GPU 実行には 49152 以上）")},
         }, ["reactions", "task"]),
         func=lambda **kw: reactiont5.predict_reaction_t5(workspace, sandbox=t5_sandbox, **kw),
         risk_level="medium",

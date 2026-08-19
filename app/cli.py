@@ -247,6 +247,10 @@ def format_event(event) -> str:
         text = f"{mark} {p.get('tool')} [{p.get('status')}] {p.get('summary', '')}"
         if p.get("error_type"):
             text += f" (error_type={p['error_type']})"
+        if p.get("stderr_tail"):
+            # 全文は workspace の tool_errors.jsonl に残っている
+            last = str(p["stderr_tail"]).strip().splitlines()[-1][:160]
+            text += f" | stderr: {last} → {p.get('error_log', 'tool_errors.jsonl')}"
     elif kind == "artifact":
         text = f"⎘ {p.get('path', '')} ({p.get('bytes', '?')}B)"
     elif kind == "final":

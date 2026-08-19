@@ -17,7 +17,7 @@ _KIND_BY_EXT = {
     ".csv": "data", ".json": "data", ".parquet": "data", ".xyz": "data",
     ".md": "report", ".txt": "report", ".html": "report",
     ".pkl": "model", ".joblib": "model",
-    ".log": "log",
+    ".log": "log", ".jsonl": "log",
 }
 
 _IGNORED_NAMES = {"manifest.json", "ledger.json", "report.json", "report.md"}

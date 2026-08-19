@@ -15,7 +15,7 @@ from harness.policy import PolicyGate
 from harness.skill_registry import Skill
 from harness.traces import TraceWriter, clip, read_trace
 from schemas import AgentEvent, RunState, RuntimeConfig, TaskSpec, ToolResult
-from tools.registry import ToolRegistry
+from tools.registry import ERROR_LOG_NAME, ToolRegistry
 
 
 class AdapterUnavailable(RuntimeError):
@@ -80,10 +80,17 @@ class BaseAdapter(ABC):
                                 error_type="approval_denied")
         else:
             result = self.tools.call(name, **arguments)
-        self.tracer.emit("tool_result", actor=self.name, payload={
+        payload = {
             "tool": name, "status": result.status, "summary": clip(result.summary, 500),
             "error_type": result.error_type,
-        })
+        }
+        # stderr / traceback の末尾を trace にも載せる（全文は workspace の
+        # tool_errors.jsonl に ToolRegistry が残している）
+        detail = _failure_detail(result)
+        if detail:
+            payload["stderr_tail"] = clip(detail, 600)
+            payload["error_log"] = ERROR_LOG_NAME
+        self.tracer.emit("tool_result", actor=self.name, payload=payload)
         for artifact in result.artifacts:
             self.tracer.emit("artifact", actor=self.name, payload=artifact.model_dump())
         return result
@@ -137,3 +144,15 @@ class BaseAdapter(ABC):
 
 def _clip_args(arguments: dict[str, Any], limit: int = 500) -> dict[str, Any]:
     return {k: clip(v, limit) for k, v in arguments.items()}
+
+
+def _failure_detail(result: ToolResult) -> str:
+    """失敗した ToolResult から、原因が読み取れる末尾のテキストを取り出す。"""
+    if result.status == "success":
+        return ""
+    for key in ("stderr", "traceback", "stdout"):
+        value = result.data.get(key)
+        if isinstance(value, str) and value.strip():
+            lines = [line for line in value.strip().splitlines() if line.strip()]
+            return "\n".join(lines[-6:])
+    return ""

@@ -1,7 +1,7 @@
 ---
 name: reaction-prediction
 description: Predict reaction yield, products (forward), or single-step precursors (retrosynthesis) with pretrained ReactionT5v2 models.
-version: 1.2.0
+version: 1.3.0
 risk_level: medium
 required_tools:
   - predict_reaction_t5
@@ -54,8 +54,10 @@ task_types:
 - error_type=timeout: `status=partial` なら完了分は CSV に残っているので、
   `data.pending` の反応だけを分割して呼び直す（すべてやり直さない）。
   1 件も終わっていなければ `timeout_sec` を上げるか入力を分割する。
-- error_type=out_of_memory（OpenBLAS の確保エラー / SIGKILL）: torch と transformers は
-  import だけでコア数分のアドレス空間を要求する。`memory_limit_mb` を上げる
-  （既定 16384 → 32768）。入力を減らしても直らない種類の失敗なので、分割から先に
-  試さないこと。
+- error_type=out_of_memory: torch は import と CUDA 初期化の時点で大量のアドレス空間
+  （`memory_limit_mb` = RLIMIT_AS）を要求する。**入力を減らしても直らない種類の失敗**
+  なので、分割から先に試さず `memory_limit_mb` を上げる（既定 65536。GPU 実行には
+  49152 以上が必要で、それ未満だと `CUDA error: out of memory` になる — GPU の VRAM
+  ではなくアドレス空間の不足）。上げても直らない場合は VRAM が他プロセスで埋まって
+  いる可能性があるので、時間をおいて 1 回だけ再試行し、それでも失敗すれば報告する。
 - 範囲外の yield / 無効な SMILES 出力: 入力文字列の形式（接頭辞・`.` 連結・正準化）を見直して1回だけ再試行する。

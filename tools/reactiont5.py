@@ -30,19 +30,36 @@ OUTPUT_JSON = "_reactiont5_output.json"
 PARTIAL_JSON = "_reactiont5_partial.json"
 SCRIPT_NAME = "_reactiont5_script.py"
 
-# torch を import するだけで、OpenBLAS がコア数分のバッファを確保しようとするため、
-# sandbox 既定のメモリ上限ではアドレス空間 (RLIMIT_AS) が足りずに
-# `OpenBLAS error: Memory allocation still failed after 10 retries` で落ちる。
-# 88 コア機での実測: 4096 / 8192 / 12288MB は失敗、16384MB で成功（RSS は 1.6GB
-# 程度で、必要なのは実メモリではなくアドレス空間）。
-DEFAULT_MEMORY_LIMIT_MB = 16384
+# local sandbox の memory_limit_mb は RLIMIT_AS（アドレス空間）であり、実メモリ
+# 使用量（RSS 約 1.6GB）とは別物。torch は import と CUDA 初期化の時点で大量の
+# アドレス空間を予約するため、小さいと計算前に落ちる。実測（88 コア + VRAM 97GB の
+# GPU 3 枚）:
+#   - GPU 無効（CPU 実行）: 4096 / 8192 / 12288 は失敗、16384 で成功
+#     （`OpenBLAS error: Memory allocation still failed after 10 retries`）
+#   - GPU 有効: 32768 でも最初の推論で `CUDA error: out of memory` になり、
+#     49152 で成功（VRAM ではなくホスト側のアドレス空間予約が原因）
+# CUDA が使える環境が既定なので、GPU 実行が通る値を既定にして余裕を持たせる。
+DEFAULT_MEMORY_LIMIT_MB = 65536
 
 # torch は既定で全コアを使うので、CPU 時間の上限（LocalSandbox の RLIMIT_CPU は
 # 全スレッドの合計）はコア数で見積もる。これを小さくすると、実時間の timeout より
 # 先に SIGKILL が飛んで原因が分かりにくくなる（1 反応で user time 約 16s）。
 _CPU_THREADS = os.cpu_count() or 8
 
+# GPU 実行が RLIMIT_AS 不足で落ちたときのメッセージ。VRAM 不足と区別できないので
+# 両方の対処を示す（GPU が空いていれば原因はアドレス空間側）
+_CUDA_OOM = (
+    r"CUDA error: out of memory|cudaErrorMemoryAllocation|CUDA out of memory",
+    "out_of_memory", True,
+    "CUDA のメモリ確保に失敗しました。GPU が空いている場合の主因は VRAM ではなく"
+    "アドレス空間 (RLIMIT_AS) の不足なので、memory_limit_mb を上げてください"
+    f"（GPU 実行には 49152MB 以上が必要。既定 {DEFAULT_MEMORY_LIMIT_MB}MB）。"
+    "VRAM が他プロセスで埋まっている場合は、反応を分割するか時間をおいて再試行して"
+    "ください。",
+)
+
 _T5_FAILURES = (
+    _CUDA_OOM,
     # OpenBLAS / tokenizers(rayon) / mmap はいずれもアドレス空間不足で落ちるが、
     # envrun の共通ルール（Cannot allocate memory 等）には引っかからない文言を使う
     (r"OpenBLAS error: Memory allocation|ThreadPoolBuildError|unable to mmap"
@@ -50,7 +67,7 @@ _T5_FAILURES = (
      "out_of_memory", True,
      "メモリ上限が足りません（torch / transformers は import だけでコア数分の"
      "アドレス空間を要求します）。memory_limit_mb を上げてください"
-     f"（既定 {DEFAULT_MEMORY_LIMIT_MB}MB、不足する場合は 32768 以上）。"),
+     f"（既定 {DEFAULT_MEMORY_LIMIT_MB}MB）。"),
     (r"HTTPError|ConnectionError|offline|Can't load|We couldn't connect|OSError",
      "model_unavailable", False,
      "モデルのダウンロード/ロードに失敗しました。ネットワークまたは "

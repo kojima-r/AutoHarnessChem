@@ -22,6 +22,7 @@ CHECKER = Path(__file__).parent / "js" / "check_structures.js"
 INDEX_HTML = ROOT / "app" / "web" / "index.html"
 
 MOLECULE = "CC(=O)Nc1ccc(O)cc1"                                  # パラセタモール
+REQUEST = f"パラセタモール (CC(=O)Nc1ccc(O)cc1) の逆合成経路を提案してください"
 REACTION = "CC(=O)OC(C)=O.Nc1ccc(O)cc1>>CC(=O)Nc1ccc(O)cc1"      # アセチル化
 
 REPORT_MD = f"""# 構造可視化の確認
@@ -68,8 +69,10 @@ def checked(tmp_path_factory):
     assert render_report_html(workspace).status == "success"
 
     run_id = "run-jsdom-check"
-    artifacts = [{"path": f"/ws/{run_id}/{name}", "mime": "text/csv", "bytes": 100}
-                 for name in ("retrosynthesis_routes.csv", "orbital_features.csv")]
+    artifacts = [{"path": f"/ws/{run_id}/{name}", "mime": mime, "bytes": 100}
+                 for name, mime in (("retrosynthesis_routes.csv", "text/csv"),
+                                    ("orbital_features.csv", "text/csv"),
+                                    ("report_user.html", "text/html"))]
     fixtures = {
         "run_id": run_id,
         "molecule": MOLECULE,
@@ -82,7 +85,14 @@ def checked(tmp_path_factory):
                         "task_type": "retrosynthesis_planning", "description": "check"},
         "run_detail": {"run_id": run_id, "status": "succeeded", "provider": "claude",
                        "artifacts": artifacts,
+                       "report_md": "# Run report: " + run_id,
                        "report": {"attempts": 1, "artifacts": artifacts,
+                                  "final_message": "完了しました",
+                                  "task": {"description": REQUEST,
+                                           "task_type": "retrosynthesis_planning",
+                                           "secondary_task_types": [],
+                                           "inputs": {"files": ["data_smi.csv"]},
+                                           "expected_outputs": ["retrosynthesis_routes.json"]},
                                   "verification": {"passed": True,
                                                    "requirements_satisfied": ["ok"],
                                                    "requirements_missing": [],
@@ -90,7 +100,16 @@ def checked(tmp_path_factory):
         "events": [{"run_id": run_id, "event_type": "tool_call", "actor": "claude",
                     "payload": {"tool": "plan_retrosynthesis",
                                 "arguments": {"targets": [MOLECULE]}},
-                    "timestamp": "2026-07-25T12:00:00+00:00"}],
+                    "timestamp": "2026-07-25T12:00:00+00:00"},
+                   # 失敗イベント（stderr の末尾 + エラーログの場所を trace に載せる）
+                   {"run_id": run_id, "event_type": "tool_result", "actor": "claude",
+                    "payload": {"tool": "predict_reaction_t5", "status": "failed",
+                                "summary": "CUDA のメモリ確保に失敗しました。",
+                                "error_type": "out_of_memory",
+                                "stderr_tail": "line1\ntorch.AcceleratorError: "
+                                               "CUDA error: out of memory",
+                                "error_log": "tool_errors.jsonl"},
+                    "timestamp": "2026-07-25T12:00:05+00:00"}],
         "csvs": {"retrosynthesis_routes.csv": RETRO_CSV,
                  "orbital_features.csv": ORBITAL_CSV},
     }
@@ -161,3 +180,37 @@ def test_ui_structure_card_renders_reactions_from_csv(checked):
     # 逆合成 CSV は「前駆体 >> 目標分子」の反応式として描かれる
     assert card["reactions"] >= 1
     assert any("経路" in label for label in card["labels"])
+
+
+def test_ui_detail_shows_request_and_user_report_by_default(checked):
+    """ラン詳細では「ユーザからの入力」と「ユーザ向け報告」が最初から見えている。"""
+    layout = checked["ui"]["layout"]
+    assert "ユーザからの入力" in layout["headings"]
+    assert "ユーザ向け報告" in layout["headings"]
+    assert REQUEST in layout["request"]
+    assert "retrosynthesis_planning" in layout["meta"]      # task_type などの付随情報
+    assert "data_smi.csv" in layout["meta"]                  # 入力ファイル
+    assert layout["reportFrame"] is True                     # report_user.html を埋め込み表示
+
+
+def test_ui_detail_other_sections_are_collapsed_by_default(checked):
+    """検証結果・構造・trace・成果物・report.md は既定で閉じたトグルになっている。"""
+    sections = {s["key"]: s for s in checked["ui"]["layout"]["sections"]}
+    assert {"verification", "structures", "trace", "artifacts", "report_md"} <= set(sections)
+    assert [key for key, s in sections.items() if s["open"]] == []
+    # 構造は中身があるときだけ表示される（描画自体は閉じたままでも行われる）
+    assert sections["structures"]["hidden"] is False
+
+
+def test_ui_detail_toggle_state_survives_rerender(checked):
+    """開いたセクションはポーリングによる再描画で閉じない。"""
+    assert checked["ui"]["layout"]["reopened"] == ["trace"]
+
+
+def test_ui_trace_shows_stderr_tail_and_links_the_error_log(checked):
+    """失敗イベントは stderr の末尾を表示し、全文のログへリンクすること。"""
+    layout = checked["ui"]["layout"]
+    row = next((r for r in layout["traceRows"] if "predict_reaction_t5" in r), "")
+    assert "out_of_memory" in row
+    assert "stderr: torch.AcceleratorError: CUDA error: out of memory" in row
+    assert any(link.endswith("artifacts/tool_errors.jsonl") for link in layout["traceLinks"])

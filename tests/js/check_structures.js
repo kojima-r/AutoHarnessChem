@@ -184,7 +184,32 @@ async function checkUi() {
       ? li.querySelector(".label").textContent : ""),
   };
 
-  const result = { molecule, reaction, template, preset: presetResult, card,
+  // 6. ラン詳細のレイアウト（既定表示 = 入力と報告 / それ以外は折りたたみ）
+  const detailBox = $("detail");
+  const sections = () => [...detailBox.querySelectorAll("details[data-section]")]
+    .map((element) => ({ key: element.dataset.section, open: element.open,
+                         hidden: element.hidden }));
+  const layout = {
+    headings: [...detailBox.querySelectorAll(".card > h2")]
+      .map((h) => h.textContent.replace(/\s+/g, " ").trim()),
+    request: (detailBox.querySelector(".request") || {}).textContent || "",
+    meta: (detailBox.querySelector(".meta") || {}).textContent || "",
+    reportFrame: !!detailBox.querySelector("iframe.report"),
+    sections: sections(),
+    // 失敗イベントは stderr の末尾とエラーログへのリンクを持つ
+    traceRows: [...detailBox.querySelectorAll("#trace .ev .p")]
+      .map((el) => el.textContent.replace(/\s+/g, " ").trim()),
+    traceLinks: [...detailBox.querySelectorAll("#trace .ev a")]
+      .map((a) => a.getAttribute("href")),
+  };
+  // 開いた状態がポーリングによる再描画をまたいで保持されること
+  detailBox.querySelector('details[data-section="trace"]').open = true;
+  await wait(50);
+  window.selectRun(fixtures.run_id);
+  await wait(900);
+  layout.reopened = sections().filter((s) => s.open).map((s) => s.key);
+
+  const result = { molecule, reaction, template, preset: presetResult, card, layout,
                    jsdom_errors: [...new Set(errors)] };
   window.close();
   return result;

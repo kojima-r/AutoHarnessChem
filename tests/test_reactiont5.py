@@ -95,7 +95,8 @@ def test_memory_and_timeout_limits_are_applied(tmp_path):
 
     assert result.status == "success"
     seen = sandbox.seen_limits[0]
-    assert seen["memory_limit_mb"] == DEFAULT_MEMORY_LIMIT_MB >= 16384
+    # GPU 実行では 49152MB 未満で CUDA の確保に失敗するため、既定はそれ以上
+    assert seen["memory_limit_mb"] == DEFAULT_MEMORY_LIMIT_MB >= 49152
     assert seen["timeout_sec"] == 1800
     # CPU 時間上限は実時間より先に効いてはいけない（torch は全コアを使う）
     assert seen["cpu_limit_sec"] > 1800
@@ -138,6 +139,17 @@ def test_failure_classification(tmp_path):
                    "giving up."))
     assert oom.error_type == "out_of_memory" and oom.retryable
     assert "memory_limit_mb" in oom.summary
+
+    # GPU 実行時のアドレス空間不足（run-fae216b1e7be）。CUDA の OOM も
+    # runtime_error ではなく out_of_memory として上限の上げ方を案内する
+    cuda_oom = predict_reaction_t5(
+        tmp_path, ["x"], task="yield",
+        sandbox=StubSandbox(
+            tmp_path, returncode=1,
+            stderr="torch.AcceleratorError: CUDA error: out of memory\n"
+                   "Search for `cudaErrorMemoryAllocation' in https://docs.nvidia.com/..."))
+    assert cuda_oom.error_type == "out_of_memory" and cuda_oom.retryable
+    assert "49152" in cuda_oom.summary          # GPU 実行に必要な下限を伝える
 
     timeout = predict_reaction_t5(
         tmp_path, ["x"], task="yield",
