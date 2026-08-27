@@ -1,0 +1,1056 @@
+# ChemEval タスクカタログ（AutoHarnessChem 側の評価定義）
+#
+# ChemEval のデータ（HuggingFace: Ooo1/ChemEval）は 1 行につき
+#   query（問題文。出力形式の指示を含む） / target（正解） / filename（タスク名）
+# を持つ。filename から 0shot / 3shot の印（`3shot_` 接頭・`_3shot` 接尾）と拡張子を
+# 落としたものが `key`。ここではその key ごとに
+#   - level / dimension : 論文の 4 レベル・13 能力次元（集計の軸）
+#   - metric            : 採点方式（benchmarks_chemeval/metrics.py の METRICS のキー）
+#   - ahc_task_type     : ahc に渡す task_type。Skill 選択とツール（pyscf / ReactionT5 /
+#                         AiZynthFinder / RDKit）の使用可否がこれで決まる
+#   - answer_type       : 期待する answer の型（抽出時の整形に使う）
+# を対応づける。**正解と採点方式は Evolver の変更禁止対象**（benchmarks/tasks.yaml と同じ扱い）。
+#
+# metric の意味（詳細は metrics.py の docstring）:
+#   choice        選択肢集合の完全一致          true_false   正誤判定の一致
+#   yes_no        Yes/No の一致                 contains     単一ラベルの包含一致
+#   entity_f1     カンマ区切り集合の F1          relation_f1  (…) タプル集合の F1
+#   reagent_f1    試薬集合の F1 + 正規化一致      sider        20 ラベルの平均一致率
+#   regression    RMSE / MAE（数値・範囲は中央値） range_overlap 範囲の重なり率
+#   smiles        正準 SMILES 完全一致 + Tanimoto formula      分子式の一致 + 原子組成類似度
+#   iupac         IUPAC 名の一致 + BLEU + 編集距離  selfies    SELFIES/SMILES 相互変換の一致
+#   judge         LLM-as-judge（0..1 の得点）
+
+tasks:
+  # ---- Level 1: Advanced Knowledge Question Answering ------------------
+  - id: objective_choice
+    key: 选择任务
+    name: 選択問題 (Objective / multiple choice)
+    level: advanced_knowledge_qa
+    dimension: objective_questions
+    metric: choice
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: objective_true_false
+    key: 判断任务
+    name: 正誤判定 (Objective / true-false)
+    level: advanced_knowledge_qa
+    dimension: objective_questions
+    metric: true_false
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: objective_fill_in_blank
+    key: 填空任务
+    name: 空所補充 (Objective / fill in the blank)
+    level: advanced_knowledge_qa
+    dimension: objective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: subjective_short_answer
+    key: 简答任务
+    name: 短答 (Subjective / short answer)
+    level: advanced_knowledge_qa
+    dimension: subjective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: subjective_calculation
+    key: 计算任务
+    name: 計算問題 (Subjective / calculation)
+    level: advanced_knowledge_qa
+    dimension: subjective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  # ---- Level 2: Literature Understanding -------------------------------
+  - id: extract_reaction_product
+    key: 合成反应产物抽取_test
+    name: 合成反応の生成物抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_reaction_substrate
+    key: 合成反应底物抽取_test
+    name: 合成反応の基質抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_catalysis_type
+    key: 2.文献理解/1.信息抽取/10.催化类型抽取_自建/催化类型抽取_test
+    name: 触媒種の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_yield
+    key: 2.文献理解/1.信息抽取/11.产率性能抽取_自建/产率性能抽取_test
+    name: 収率の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_additive
+    key: 2.文献理解/1.信息抽取/4.合成反应添加剂抽取_自建/合成反应添加剂抽取_test
+    name: 添加剤の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_solvent
+    key: 2.文献理解/1.信息抽取/5.合成反应溶剂抽取_自建/合成反应溶剂抽取_test
+    name: 溶媒の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_temperature
+    key: 2.文献理解/1.信息抽取/6.合成反应温度抽取_自建/合成反应温度抽取_test
+    name: 反応温度の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_reaction_time
+    key: 2.文献理解/1.信息抽取/7.合成反应时间抽取_自建/合成反应时间抽取_test
+    name: 反応時間の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: extract_characterization
+    key: 2.文献理解/1.信息抽取/9.表征手段抽取_自建/表征手段抽取_test
+    name: 分析手法の抽出
+    level: literature_understanding
+    dimension: information_extraction
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: chemical_ner
+    key: 化学命名实体识别_test
+    name: 化学固有表現認識 (NER)
+    level: literature_understanding
+    dimension: molecular_name_recognition
+    metric: entity_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: chemical_relation_extraction
+    key: 化学实体关系分类_test
+    name: 化学実体間関係の分類
+    level: literature_understanding
+    dimension: information_extraction
+    metric: relation_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: abstract_generation
+    key: 2.文献理解/2.归纳生成/1.化学论文摘要生成_自建/化学论文摘要生成_test
+    name: 論文アブストラクト生成
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: outline_generation
+    key: 2.文献理解/2.归纳生成/2.研究内容提纲生成_自建/研究内容提纲生成_test
+    name: 研究内容の提綱生成
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: literature_topic_classification
+    key: 2.文献理解/2.归纳生成/3.化学文献主题分类_自建/化学文献主题分类_test
+    name: 文献のトピック分類
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: contains
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: reaction_type_induction
+    key: 2.文献理解/2.归纳生成/4.化学反应类型识别归纳_自建/化学反应类型识别归纳_test
+    name: 反応種別の認識・帰納
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: contains
+    ahc_task_type: generic
+    answer_type: text
+
+  # ---- Level 3: Molecular Understanding --------------------------------
+  - id: name_generation_from_text
+    key: 基于文本描述生成分子名称_test
+    name: テキスト記述からの分子名生成
+    level: molecular_understanding
+    dimension: molecular_name_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: iupac_to_smiles
+    key: IUPAC转SMILES_test
+    name: IUPAC 名 → SMILES
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: smiles
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: smiles_to_iupac
+    key: SMILES转IUPAC
+    name: SMILES → IUPAC 名
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: iupac
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: smiles_to_formula
+    key: SMILES转分子式_test
+    name: SMILES → 分子式
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: formula
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: iupac_to_formula
+    key: IUPAC转分子式_test
+    name: IUPAC 名 → 分子式
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: formula
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: smiles_selfies_translation
+    key: SMILES与SELFIES互译_test
+    name: SMILES ⇄ SELFIES 相互変換
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: selfies
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: property_bbbp
+    key: BBBP_test
+    name: BBBP（血液脳関門透過）分類
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: property_clintox
+    key: ClinTox_test
+    name: ClinTox（臨床毒性）分類
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: property_hiv
+    key: HIV_test
+    name: HIV（抗ウイルス活性）分類
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: property_sider
+    key: SIDER_test
+    name: SIDER（副作用 20 ラベル）分類
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: sider
+    ahc_task_type: generic
+    answer_type: dict
+
+  - id: property_esol
+    key: ESOL_test
+    name: ESOL（水溶解度）回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: property_lipo
+    key: Lipo_test
+    name: Lipophilicity（logD）回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  # HOMO / LUMO は harness の量子化学ツール（pyscf / OptTDDFT）が使えるため
+  # task_type を orbital_calculation にして「計算して答える」余地を与える
+  - id: property_homo
+    key: HOMO_test
+    name: HOMO エネルギー回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: orbital_calculation
+    answer_type: number
+
+  - id: property_lumo
+    key: LUMO_test
+    name: LUMO エネルギー回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: orbital_calculation
+    answer_type: number
+
+  - id: property_polarity_classification
+    key: 3.分子理解/3.分子性质预测/1.5分子性质分类预测极性_自建/极性_test
+    name: 極性の分類
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: property_polarity_regression
+    key: 3.分子理解/3.分子性质预测/2.5分子性质回归预测极性_自建/极性_test
+    name: 極性 (ET30) 回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: property_melting_point
+    key: 3.分子理解/3.分子性质预测/2.6.1分子性质回归预测熔点_自建/熔点_test
+    name: 融点回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: property_boiling_point
+    key: 3.分子理解/3.分子性质预测/2.6.2分子性质回归预测沸点_自建/沸点_test
+    name: 沸点回帰
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: molecular_description
+    key: 基于分子结构描述分子的物理化学性质_test
+    name: 構造から物理化学的性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  # ---- Level 4: Scientific Knowledge Deduction -------------------------
+  # 逆合成・生成物予測は ReactionT5 / AiZynthFinder が使える task_type にする
+  - id: retro_substrate_recommendation
+    key: 反应底物推荐_test
+    name: 反応基質（前駆体）推薦
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: smiles
+    ahc_task_type: reaction_prediction
+    answer_type: text
+
+  - id: retro_single_step_route
+    key: 4.科学知识推演/1.逆向合成分析/2.1.单步合成路径推荐_自建/单步合成路径推荐_test
+    name: 単段合成経路の推薦
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: judge
+    ahc_task_type: reaction_prediction
+    answer_type: text
+
+  - id: retro_multi_step_route
+    key: 4.科学知识推演/1.逆向合成分析/2.2.多步合成路径推荐_自建/多步合成路径推荐_test
+    name: 多段合成経路の推薦
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: judge
+    ahc_task_type: retrosynthesis_planning
+    answer_type: text
+
+  - id: synthetic_difficulty
+    key: 4.科学知识推演/1.逆向合成分析/3.合成难度评估_自建/合成难度评估_test
+    name: 合成難易度 (SA score) 評価
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: condition_reagent
+    key: 试剂推荐_test
+    name: 試薬の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: list
+
+  - id: condition_solvent
+    key: 溶剂推荐_test
+    name: 溶媒の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: list
+
+  - id: condition_ligand
+    key: 配体推荐_test
+    name: 配位子の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: list
+
+  - id: condition_catalyst
+    key: 4.科学知识推演/2.反应条件推荐/4.催化剂推荐_自建/催化剂推荐_test
+    name: 触媒の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: condition_temperature
+    key: 4.科学知识推演/2.反应条件推荐/5.反应温度推荐_自建/反应温度推荐_test
+    name: 反応温度の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: condition_time
+    key: 4.科学知识推演/2.反应条件推荐/6.反应时间推荐_自建/反应时间推荐_test
+    name: 反応時間の推薦
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+
+  - id: reaction_product_prediction
+    key: 反应产物预测_test
+    name: 反応生成物の予測
+    level: scientific_knowledge_deduction
+    dimension: reaction_outcome_prediction
+    metric: smiles
+    ahc_task_type: reaction_prediction
+    answer_type: text
+
+  - id: reaction_yield_prediction
+    key: 产物产率预测_test
+    name: 収率（高収率か）の予測
+    level: scientific_knowledge_deduction
+    dimension: reaction_outcome_prediction
+    metric: yes_no
+    ahc_task_type: reaction_prediction
+    answer_type: text
+
+  - id: activation_energy_range
+    key: 4.科学知识推演/3.反应结果预测/3.反应活化能刻画_自建/反应活化能刻画_test
+    name: 反応活性化エネルギーの範囲
+    level: scientific_knowledge_deduction
+    dimension: reaction_outcome_prediction
+    metric: range_overlap
+    ahc_task_type: generic
+    answer_type: text
+
+  - id: reaction_intermediate
+    key: 4.科学知识推演/4.反应机理分析/1.反应中间体推导_自建/反应中间体推导_test
+    name: 反応中間体の推定
+    level: scientific_knowledge_deduction
+    dimension: reaction_mechanism_analysis
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+
+  # ==== multimodal split（画像付き。key は `file_path` 列から取る） ==========
+  # multimodal 側は `filename` が空で、タスク名が `file_path` に入っている。
+  # level / dimension は text 側と同じ軸に寄せてある（論文はタスク一覧を
+  # レベル別に細分していないため、内容から対応させた）。
+
+  # ---- Level 1: Advanced Knowledge Question Answering ------------------
+  - id: mm_objective_choice
+    key: 选择题_31
+    name: 選択問題（図つき）
+    level: advanced_knowledge_qa
+    dimension: objective_questions
+    metric: choice
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_objective_fill_in_blank
+    key: 填空题_28
+    name: 空所補充（図つき）
+    level: advanced_knowledge_qa
+    dimension: objective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_subjective_short_answer
+    key: 简答题-24
+    name: 短答（図つき）
+    level: advanced_knowledge_qa
+    dimension: subjective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_subjective_calculation
+    key: 计算题_30
+    name: 計算問題（図つき）
+    level: advanced_knowledge_qa
+    dimension: subjective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_chart_qa
+    key: 统计图问答_30
+    name: 統計図の読み取り QA
+    level: advanced_knowledge_qa
+    dimension: subjective_questions
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  # ---- Level 2: Literature Understanding -------------------------------
+  - id: mm_reaction_scheme_to_smiles
+    key: 4.合成路径解析
+    name: 反応スキーム画像 → 反応 SMILES
+    level: literature_understanding
+    dimension: information_extraction
+    metric: reaction_smiles
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_mass_spectrum_description
+    key: 质谱图_25
+    name: 質量スペクトルの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_chart_analysis
+    key: 化学多模态图表解析_30
+    name: 化学図表の解析
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_state_diagram_description
+    key: 状态图_25
+    name: 状態図・機構図の説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_potential_diagram_description
+    key: 势能图_25
+    name: ポテンシャル図の説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_ir_spectrum_description
+    key: 红外光谱_20
+    name: 赤外スペクトルの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_raman_spectrum_description
+    key: 拉曼光谱_20
+    name: ラマンスペクトルの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_uvvis_spectrum_description
+    key: 紫外可见吸收光谱_20
+    name: UV-Vis スペクトルの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_xrd_description
+    key: XRD图（衍射谱图）_20
+    name: XRD パターンの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_kinetics_plot_description
+    key: 动力学行为图_20
+    name: 反応動力学プロットの説明
+    level: literature_understanding
+    dimension: inductive_generation
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_formula_image_to_latex
+    key: 化学分子式_30
+    name: 分子式画像 → LaTeX
+    level: literature_understanding
+    dimension: molecular_name_recognition
+    metric: text_exact
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_reaction_image_to_latex
+    key: 化学反应_30
+    name: 反応式画像 → LaTeX
+    level: literature_understanding
+    dimension: molecular_name_recognition
+    metric: text_exact
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  # ---- Level 3: Molecular Understanding --------------------------------
+  - id: mm_structure_to_smiles
+    key: 2D分子识别_60
+    name: 構造式画像 → SMILES
+    level: molecular_understanding
+    dimension: molecular_name_recognition
+    metric: smiles
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_iupac_to_formula
+    key: IUPAC转分子式_23
+    name: IUPAC 名 → 分子式（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: formula
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_smiles_to_formula
+    key: SMILES转分子式_23
+    name: SMILES → 分子式（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: formula
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_iupac_to_smiles
+    key: IUPACE转SMILES_23
+    name: IUPAC 名 → SMILES（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: smiles
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_smiles_to_iupac
+    key: SMILES转IUPAC_23
+    name: SMILES → IUPAC 名（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: iupac
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_smiles_to_selfies
+    key: SMILES转SELFIES_23
+    name: SMILES → SELFIES（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: selfies
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_selfies_to_smiles
+    key: SELFIES转SMILES_23
+    name: SELFIES → SMILES（図つき）
+    level: molecular_understanding
+    dimension: molecular_name_translation
+    metric: selfies
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_property_bbbp
+    key: BBBP_20
+    name: BBBP 分類（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_property_clintox
+    key: ClinTox_20
+    name: ClinTox 分類（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_property_hiv
+    key: HIV_20
+    name: HIV 分類（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_property_sider
+    key: SIDER_20
+    name: SIDER 20 ラベル分類（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: sider
+    ahc_task_type: generic
+    answer_type: dict
+    split: multimodal
+
+  - id: mm_property_polarity
+    key: 极性_20
+    name: 極性の判定（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: yes_no
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_property_esol
+    key: ESOL_20
+    name: ESOL 回帰（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_property_lipo
+    key: Lipo_20
+    name: Lipophilicity 回帰（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_property_homo
+    key: HOMO_20
+    name: HOMO 回帰（図つき、Hartree）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: orbital_calculation
+    answer_type: number
+    split: multimodal
+
+  - id: mm_property_lumo
+    key: LUMO_20
+    name: LUMO 回帰（図つき、Hartree）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: orbital_calculation
+    answer_type: number
+    split: multimodal
+
+  - id: mm_property_boiling_point
+    key: 沸点_20
+    name: 沸点回帰（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_property_melting_point
+    key: 熔点_20
+    name: 融点回帰（図つき）
+    level: molecular_understanding
+    dimension: molecular_property_prediction
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_ir_property_description
+    key: 1.基于红外光谱描述分子的物理化学性质
+    name: 赤外スペクトルから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_raman_property_description
+    key: 2.基于拉曼光谱描述分子的物理化学性质
+    name: ラマンスペクトルから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_uvvis_property_description
+    key: 3.基于紫外可见光谱描述分子的物理化学性质
+    name: UV-Vis スペクトルから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_xrd_property_description
+    key: 4.基于衍射谱图描述分子的物理化学性质
+    name: 回折パターンから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_ms_property_description
+    key: 5.基于质谱图描述分子的物理化学性质
+    name: 質量スペクトルから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_nmr_property_description
+    key: 6.基于核磁图谱描述分子的物理化学性质
+    name: NMR スペクトルから性質を記述
+    level: molecular_understanding
+    dimension: molecular_description
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  # ---- Level 4: Scientific Knowledge Deduction -------------------------
+  - id: mm_retro_substrate_recommendation
+    key: 反应底物推荐_20
+    name: 反応基質の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: reagent_f1
+    ahc_task_type: reaction_prediction
+    answer_type: list
+    split: multimodal
+
+  - id: mm_retro_single_step_route
+    key: 单步合成路径推荐_test_original
+    name: 単段合成経路の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: judge
+    ahc_task_type: reaction_prediction
+    answer_type: text
+    split: multimodal
+
+  - id: mm_retro_multi_step_route
+    key: 多步合成路径推荐_20
+    name: 多段合成経路の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: judge
+    ahc_task_type: retrosynthesis_planning
+    answer_type: text
+    split: multimodal
+
+  - id: mm_synthetic_difficulty
+    key: 合成难度评估_20
+    name: 合成難易度評価（図つき）
+    level: scientific_knowledge_deduction
+    dimension: retrosynthetic_analysis
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_condition_ligand
+    key: 配体推荐_20
+    name: 配位子の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_condition_reagent
+    key: 试剂推荐_20
+    name: 試薬の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_condition_solvent
+    key: 溶剂推荐_20
+    name: 溶媒の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_condition_catalyst
+    key: 催化剂推荐_20
+    name: 触媒の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: reagent_f1
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal
+
+  - id: mm_condition_temperature
+    key: 反应温度推荐_20
+    name: 反応温度の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_condition_time
+    key: 反应时间推荐_20
+    name: 反応時間の推薦（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_condition_recommendation
+    metric: regression
+    ahc_task_type: generic
+    answer_type: number
+    split: multimodal
+
+  - id: mm_reaction_product_prediction
+    key: 反应产物预测_20
+    name: 反応生成物の予測（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_outcome_prediction
+    metric: smiles
+    ahc_task_type: reaction_prediction
+    answer_type: text
+    split: multimodal
+
+  - id: mm_reaction_yield_prediction
+    key: 产物产率预测_20
+    name: 収率の予測（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_outcome_prediction
+    metric: yes_no
+    ahc_task_type: reaction_prediction
+    answer_type: text
+    split: multimodal
+
+  - id: mm_reaction_intermediate
+    key: 反应中间体推导_20
+    name: 反応中間体の推定（図つき）
+    level: scientific_knowledge_deduction
+    dimension: reaction_mechanism_analysis
+    metric: judge
+    ahc_task_type: generic
+    answer_type: text
+    split: multimodal

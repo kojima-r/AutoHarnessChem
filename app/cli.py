@@ -4,6 +4,7 @@
           [--on-timeout ask|extend|stop] [--extend 7200]
   ahc skills list | compile [--provider all] | lock
   ahc benchmark [--provider deepagents --provider claude] [--tag smoke]
+  ahc chemeval run [--label smoke] [--limit-per-task 2] (= python -m benchmarks_chemeval.evaluate)
   ahc verify --workspace workspaces/run-xxxx --task-type orbital_calculation
   ahc evolve analyze | propose | evaluate --proposal <id> | promote --proposal <id>
   ahc demo [--env all|pyscf|reactiont5|aizynth] [--out DIR]
@@ -64,6 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("--id", action="append", dest="ids")
     p_bench.add_argument("--label", default="baseline")
 
+    # ChemEval（benchmarks_chemeval/）での評価。引数はそのまま
+    # `python -m benchmarks_chemeval.evaluate` へ渡す
+    p_chemeval = sub.add_parser(
+        "chemeval", help="ChemEval で評価する（prepare | tasks | run | score）")
+    p_chemeval.add_argument("chemeval_args", nargs=argparse.REMAINDER,
+                            help="benchmarks_chemeval.evaluate へ渡す引数")
+
     p_verify = sub.add_parser("verify", help="既存 workspace を Verifier で再判定する")
     p_verify.add_argument("--workspace", required=True)
     p_verify.add_argument("--task-type", dest="task_type", default="generic")
@@ -101,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_skills(config, args)
     if args.command == "benchmark":
         return _cmd_benchmark(config, args)
+    if args.command == "chemeval":
+        return _cmd_chemeval(args)
     if args.command == "verify":
         return _cmd_verify(config, args)
     if args.command == "evolve":
@@ -324,6 +334,18 @@ def _cmd_benchmark(config, args) -> int:
                                        ids=args.ids, label=args.label))
     print(json.dumps(result["summary"], indent=2, ensure_ascii=False))
     return 0
+
+
+def _cmd_chemeval(args) -> int:
+    """ChemEval 評価 CLI へ委譲する（`ahc --config` はそのまま引き継ぐ）。"""
+    from benchmarks_chemeval.evaluate import main as chemeval_main
+
+    forwarded = list(args.chemeval_args or [])
+    if args.config:
+        forwarded = ["--config", args.config, *forwarded]
+    if not ({"prepare", "tasks", "run", "score"} & set(forwarded)):
+        forwarded.append("tasks")   # サブコマンド未指定ならタスク一覧を出す
+    return chemeval_main(forwarded)
 
 
 def _cmd_verify(config, args) -> int:

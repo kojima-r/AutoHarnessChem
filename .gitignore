@@ -30,3 +30,9 @@ evolver/proposals/
 
 # secrets
 .env
+
+# ChemEval: ダウンロードしたデータセットと評価結果（再生成できる）
+benchmarks_chemeval/data/
+benchmarks_chemeval/results/
+# ChemEval 公式リポジトリのクローン（独自 .git を持つ入れ子。親にはコミットしない）
+benchmarks_chemeval/ChemEval/
