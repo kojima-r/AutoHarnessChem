@@ -9,7 +9,8 @@ import asyncio
 from pathlib import Path
 
 from benchmarks_chemeval import chem_metrics
-from benchmarks_chemeval.metrics import CHEM_METRICS, JUDGE_METRICS, score_item
+from benchmarks_chemeval.metrics import (CHEM_METRICS, JUDGE_METRICS, as_text,
+                                         score_item)
 
 # metric → rdkit 側での扱い
 _CHEM_KIND = {"smiles": "smiles", "selfies": "selfies", "reagent_f1": "reagent",
@@ -23,10 +24,14 @@ def _chem_pairs(records: list[dict]) -> list[dict]:
             continue
         if record.get("answer") is None:
             continue
+        # as_text で「リストの文字列表現」を実体に戻してから渡す。target 側は
+        # `"['CCO', 'CC']"` の形で入っていることがあり、生のまま渡すと
+        # split_multi が `"['CCO'"` のような断片にしてしまい rdkit が読めない
+        # （= 正答でも exact_match=False になる）。
         pairs.append({
             "id": f"{record['provider']}:{record['item_id']}",
-            "pred": str(record["answer"]),
-            "gold": str(record.get("target", "")),
+            "pred": as_text(record["answer"]),
+            "gold": as_text(record.get("target", "")),
             "kind": _CHEM_KIND[record["metric"]],
         })
     return pairs

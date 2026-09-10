@@ -31,8 +31,10 @@ score は「0..1 で高いほど良い代表値」。回帰系は score=None に
 """
 from __future__ import annotations
 
+import ast
 import math
 import re
+import unicodedata
 from collections import Counter
 from typing import Any
 
@@ -79,14 +81,45 @@ _FALSE_WORDS = ("incorrect", "false", "错误", "誤り", "no")
 
 # --- 共通ヘルパ ---------------------------------------------------------
 
+_DASHES = {ord(c): "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uff0d"}
+
+
+def parse_literal(value: Any) -> Any:
+    """`"[\'O\', \'O\']"` のような python/JSON リテラル文字列を実体に戻す。
+
+    ChemEval の target は「リストの文字列表現」で入っていることがある
+    （合成反应产物抽取 / 底物抽取 / 反应底物推荐 など 5 タスク）。一方 answer 側は
+    `extract.loads_loose` が既にリストへパースしている。両者を揃えないと
+    「完全正答なのに f1=0」になるため、target 側でも同じパースを行う。
+    正規化の統一であって、判定を緩めるものではない。
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) < 2 or text[0] not in "[(" or text[-1] not in "])":
+        return value
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return value
+    return parsed if isinstance(parsed, (list, tuple)) else value
+
+
 def as_text(value: Any) -> str:
+    value = parse_literal(value)
     if value is None:
         return ""
     if isinstance(value, (list, tuple)):
         return ", ".join(as_text(v) for v in value)
     if isinstance(value, dict):
         return ", ".join(f"{k}: {as_text(v)}" for k, v in value.items())
-    return str(value)
+    # NFKC で互換文字を畳む。ChemEval の target には `℃`(U+2103) や下付き数字が
+    # そのまま入っており、`°C` や `H2O` と書いた答えが不一致になるため
+    # （表記の違いであって内容の違いではない）。SMILES は ASCII なので影響しない。
+    text = unicodedata.normalize("NFKC", str(value))
+    # ダッシュ類を ASCII ハイフンへ。範囲表記（`120–180 ℃` と `120-180 °C`）の
+    # 不一致を防ぐほか、負号 U+2212 を regression が数値として読めるようにする。
+    return text.translate(_DASHES)
 
 
 def norm_text(value: Any) -> str:
@@ -261,8 +294,16 @@ def score_yes_no(answer: Any, target: str, context: dict) -> dict:
 
 
 def score_contains(answer: Any, target: str, context: dict) -> dict:
+    """gold が pred に含まれるか（公式 classification.calculate_accuracy2 相当）。
+
+    ただし単語境界を要求する。素の部分文字列一致だと
+    gold=`organic chemistry` が pred=`inorganic chemistry` に含まれてしまい、
+    **誤答が正解になる**（偽陽性）。判定を緩めないための境界条件。
+    """
     gold, pred = norm_text(target), norm_text(answer)
-    correct = bool(gold) and bool(pred) and (gold in pred or pred == gold)
+    if not gold or not pred:
+        return _result(0.0, {"accuracy": 0.0}, answered=bool(pred), valid=bool(pred))
+    correct = pred == gold or re.search(rf"(?<!\w){re.escape(gold)}(?!\w)", pred) is not None
     return _result(float(correct), {"accuracy": float(correct)},
                    answered=bool(pred), valid=bool(pred))
 

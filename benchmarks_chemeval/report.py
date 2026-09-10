@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 
+from benchmarks_chemeval import baselines
 from benchmarks_chemeval.catalog import LEVELS, load_catalog
 from benchmarks_chemeval.metrics import METRIC_INFO
 
@@ -111,7 +112,13 @@ def summarize(records: list[dict], label: str = "chemeval") -> dict:
                        if t["score"] is not None]
         overall["macro_task_score"] = _mean(task_scores)
         overall["scored_tasks"] = len(task_scores)
-        summary["providers"][provider] = {"overall": overall, "levels": levels}
+        all_tasks = {task_id: task for level in levels.values()
+                     for task_id, task in level["tasks"].items()}
+        summary["providers"][provider] = {
+            "overall": overall, "levels": levels,
+            # 論文 Table 1 の文献値との突き合わせ（採点には影響しない）
+            "baselines": baselines.compare(all_tasks),
+        }
     return summary
 
 
@@ -132,6 +139,54 @@ def _metric_cell(group: dict) -> str:
                         "exact_set_match")
             if k in metrics]
     return ", ".join(f"{k}={_fmt(metrics[k])}" for k in keep) or "-"
+
+
+def _render_baselines(compare: dict) -> list[str]:
+    """文献値（論文 Table 1）との比較セクション。"""
+    if not compare:
+        return []
+    source, macro = compare.get("source", {}), compare.get("macro") or {}
+    rows = compare.get("tasks") or {}
+    lines = ["", "### 文献値との比較（他手法）", "",
+             f"- 出典: {source.get('paper', '?')}（{source.get('venue', '?')}） "
+             f"{source.get('table', '')}",
+             f"- 論文: {source.get('url', '')} / 転記元の図: `{source.get('local_figure', '')}`",
+             "- **同条件の比較ではない**: 論文は素の LLM を 0-shot で評価している。ahc は",
+             "  「ツール（量子化学計算・反応予測・逆合成）+ Verifier + 再計画ループ」なので、",
+             "  差はモデル性能だけでなく harness の寄与も含む。",
+             ""]
+    if macro.get("n_tasks"):
+        lines += [f"指標が一致する {macro['n_tasks']} タスクだけを母集団にしたマクロ平均"
+                  "（全手法で同じタスク集合）:", "",
+                  "| 手法 | マクロ平均 |", "| --- | --: |",
+                  f"| **ahc（この run）** | **{_fmt(macro['ours'])}** |"]
+        for system, value in macro["systems"].items():
+            lines.append(f"| {system} | {_fmt(value)} |")
+        lines.append("")
+    aggregates = [a for a in (compare.get("aggregates") or []) if a["comparable"]]
+    if aggregates:
+        lines += ["論文が複数タスクを 1 行に集約している項目:", "",
+                  "| 論文タスク | 指標 | ahc 側のタスク | ahc | 文献最高 | その手法 | Δ |",
+                  "| --- | --- | --- | --: | --: | --- | --: |"]
+        for agg in aggregates:
+            delta = _fmt(agg["delta"])
+            if agg["delta"] is not None and agg["delta"] > 0:
+                delta = f"+{delta}"
+            lines.append(
+                f"| {agg['paper_task']} | {agg['paper_metric']} "
+                f"| {agg['n_tasks']} タスクの平均 | {_fmt(agg['ours'])} "
+                f"| {_fmt(agg['best'])} | {agg['best_system'] or '-'} | {delta} |")
+        lines.append("")
+    skipped = [(t, r) for t, r in rows.items() if not r["comparable"]]
+    skipped += [(",".join(a["task_ids"]), a) for a in (compare.get("aggregates") or [])
+                if not a["comparable"]]
+    if skipped:
+        lines += ["文献値を `n/a` にしたタスク（論文と指標が違うため、並べると優劣を誤らせる）:", ""]
+        for task_id, row in skipped:
+            lines.append(f"- `{task_id}` — 論文 {row['paper_task']} は "
+                         f"{row['paper_metric']}。{row.get('note', '')}")
+        lines.append("")
+    return lines
 
 
 def render_markdown(summary: dict) -> str:
@@ -163,21 +218,43 @@ def render_markdown(summary: dict) -> str:
                 f"| {_fmt(level_block['answered_rate'])} "
                 f"| {_fmt(level_block['harness_passed_rate'])} "
                 f"| {_metric_cell(level_block)} |")
+        compared = (block.get("baselines") or {}).get("tasks") or {}
         lines += ["", "### タスク別", "",
-                  "| level | dimension | task | metric | n | 主指標 | score | 回答率 | 追加指標 |",
-                  "| --- | --- | --- | --- | --: | --: | --: | --: | --- |"]
+                  "| level | dimension | task | metric | n | 主指標 | score | 回答率 "
+                  "| 比較値(ahc) | 文献最高 | その手法 | Δ | 追加指標 |",
+                  "| --- | --- | --- | --- | --: | --: | --: | --: | --- | --: | --- | --: | --- |"]
         for level, level_block in block["levels"].items():
             for task_id, task in level_block["tasks"].items():
+                ref = compared.get(task_id) or {}
+                if ref.get("comparable"):
+                    best, system = _fmt(ref.get("best")), ref.get("best_system") or "-"
+                    delta = _fmt(ref.get("delta"))
+                    if ref.get("delta") is not None and ref["delta"] > 0:
+                        delta = f"+{delta}"
+                    # Δ を検算できるように、ahc 側で比べた値と（score 以外なら）その指標名も出す
+                    field = ref.get("ours_field") or "score"
+                    ours = _fmt(ref.get("ours"))
+                    ours_cell = ours if field == "score" else f"{ours} ({field})"
+                else:
+                    ours_cell, best, system, delta = "-", "n/a", "-", "-"
                 lines.append(
                     f"| {level} | {task.get('dimension') or '-'} | {task_id} | {task['metric']} "
                     f"| {task['n']} | {_fmt(task['primary_value'])} | {_fmt(task['score'])} "
-                    f"| {_fmt(task['answered_rate'])} | {_metric_cell(task)} |")
+                    f"| {_fmt(task['answered_rate'])} | {ours_cell} | {best} | {system} | {delta} "
+                    f"| {_metric_cell(task)} |")
+        lines += _render_baselines(block.get("baselines") or {})
         lines.append("")
     lines += ["## 注記", "",
               "- score は 0..1 で高いほど良い代表値。回帰タスク（RMSE/MAE）は尺度が違うため",
               "  score には含めず「主指標」列に出す。",
               "- judge 系タスクは `--judge` を指定したときだけ採点される（未指定なら score=None）。",
               "- Verifier 合格率は「ahc が答えファイルを作れたか」であり、答えの正しさとは別。",
+              "- 「文献最高」は ChemEval 論文 Table 1（0-shot text）の 13 手法中の最高値を",
+              "  0..1 に直したもの。正本は `benchmarks_chemeval/baselines.yaml`。**指標が一致する",
+              "  タスクだけ**に入れ、違うものは `n/a`（理由は上の一覧）。Δ = ahc − 文献最高。",
+              "- タスクによって ahc 側の比較値は score でなく tanimoto / exact_set_match を使う",
+              "  （論文の主指標に合わせる）。どの値を使ったかは metrics.json の",
+              "  `baselines.tasks.<task>.ours_field` にある。",
               ""]
     return "\n".join(lines)
 

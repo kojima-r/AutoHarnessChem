@@ -128,10 +128,33 @@ python -m benchmarks_chemeval.evaluate score --label l4 --judge auto
   カタログは `file_path` を key として引く（`mm_` 接頭の id）。
 - 3-shot は multimodal には無い（すべて 0-shot 扱い）。
 
+## 文献値との比較
+
+`baselines.yaml` に ChemEval 論文（ICLR 2026）**Table 1「representative multi-level 0-Shot
+text tasks」の 13 手法の値**を入れてあり、`report.md` のタスク別表に「文献最高 / その手法 /
+Δ」列と、手法別マクロ平均の比較表が出る。転記元は公式リポジトリに同梱の図
+`ChemEval/docs/assets/chemeval-text-zero-shot-results.png`（論文 Table 1）。
+
+比較で守っていること:
+
+- **指標が一致するタスクだけ並べる。** 論文が NRMSE（正規化済み）や原子組成の L2 距離を
+  使っているタスクは ahc の RMSE / 一致率と尺度が違うので `comparable: false` にして
+  `n/a` を出す（並べると優劣が逆に見える）。現状 41 行のうち 31 行が比較可能。
+- **ahc 側の比較値はタスクごとに指定する**（`ours_field`）。論文 IUPAC2SMILES の主指標は
+  Tanimoto なので ahc の score（正準 SMILES 完全一致）ではなく `tanimoto` と比べる、など。
+  レポートの「比較値(ahc)」列に実際に使った値と指標名が出るので Δ を検算できる。
+- **マクロ平均は全手法で同じタスク集合**にする（欠測の多い手法が有利にならないように）。
+- **同条件の比較ではない。** 論文は素の LLM の 0-shot 評価で、ahc は「ツール + Verifier +
+  再計画ループ」。差には harness の寄与が含まれる。レポートにもこの注記が入る。
+- arXiv:2409.13989 は 42 タスク版の旧稿で数値が違うため混ぜていない。出典は ICLR 版 Table 1 のみ。
+
+文献値は**出典データであって採点には一切使わない**（`score` の計算経路から独立）。
+
 ## 注意
 
 - **正解と採点方式は Evolver の変更禁止対象**。`benchmarks/tasks.yaml` と同じ扱いで、
-  `tasks.yaml`・`metrics.py`・`score.py` を自己改善で緩めないこと。
+  `tasks.yaml`・`metrics.py`・`score.py` を自己改善で緩めないこと。`baselines.yaml`
+  （文献値）も出典データなので書き換えない。
 - ChemEval のライセンスは CC BY-NC-SA 4.0（非商用）。`benchmarks_chemeval/ChemEval/` と
   `data/` は親リポジトリにコミットしない（`.gitignore` 済み）。
 - 1 問 = 1 エージェント実行なので、全 3,880 問を回すと SDK の API コストと時間が

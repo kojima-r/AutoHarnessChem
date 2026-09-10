@@ -10,6 +10,8 @@
   chem_metrics.py 正準 SMILES / Tanimoto（rdkit 環境へ envrun で委譲）
   judge.py       自由記述タスクの LLM-as-judge
   score.py       records.jsonl の採点
+  baselines.yaml 論文 Table 1（0-shot text）の文献値。他手法と並べるための出典データ
+  baselines.py   文献値の読み込みと ahc の結果との突き合わせ（採点には関与しない）
   report.py      レベル / 次元 / タスク別の集計と Markdown レポート
   evaluate.py    CLI（`python -m benchmarks_chemeval.evaluate` / `ahc chemeval`）
 """

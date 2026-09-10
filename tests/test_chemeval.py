@@ -171,6 +171,75 @@ def test_judge_metric_is_excluded_without_judge():
     assert with_judge["score"] == 0.8
 
 
+# --- 文献値（論文 Table 1）------------------------------------------------
+
+def test_baselines_are_consistent_with_catalog():
+    """baselines.yaml の task_id・手法・指標の整合性を検査する。"""
+    from benchmarks_chemeval import baselines as bl
+
+    doc = bl.load_baselines()
+    known = {task.id for task in load_catalog()}
+    systems = doc["systems"]
+    assert len(systems) == len(set(systems)) == 13
+    for entry in doc["tasks"]:
+        assert entry["task_id"] in known, entry["task_id"]
+        # 比較可能な行は 13 手法すべての値を持ち、ahc 側の比較先が決まっていること
+        if entry["comparable"]:
+            assert set(entry["values"]) == set(systems), entry["task_id"]
+            assert all(v is not None for v in entry["values"].values()), entry["task_id"]
+            assert entry.get("ours_field"), entry["task_id"]
+    for agg in doc["aggregates"]:
+        assert all(t in known for t in agg["task_ids"]), agg["paper_task"]
+
+
+def test_baseline_comparison_scales_and_picks_best():
+    """0..100 の文献値を 0..1 に直し、最高値・Δ を正しく出す。"""
+    from benchmarks_chemeval import baselines as bl
+
+    doc = {"systems": ["A", "B"],
+           "tasks": [{"task_id": "objective_choice", "paper_task": "MCTask",
+                      "paper_metric": "Accuracy", "comparable": True,
+                      "ours_field": "score", "values": {"A": 40.0, "B": 80.0}},
+                     {"task_id": "iupac_to_smiles", "paper_task": "IUPAC2SMILES",
+                      "paper_metric": "Tanimoto (valid)", "comparable": True,
+                      "ours_field": "tanimoto", "values": {"A": 50.0, "B": 30.0}},
+                     {"task_id": "smiles_to_formula", "paper_task": "SMILES2MF",
+                      "paper_metric": "L2", "comparable": False,
+                      "values": {"A": 0.5, "B": 0.6}}],
+           "aggregates": []}
+    tasks = {"objective_choice": {"score": 0.95, "metrics": {}},
+             "iupac_to_smiles": {"score": 0.62, "metrics": {"tanimoto": 0.964}},
+             "smiles_to_formula": {"score": 0.98, "metrics": {}}}
+    rows = bl.task_rows(tasks, doc)
+    assert rows["objective_choice"]["best"] == 0.8
+    assert rows["objective_choice"]["best_system"] == "B"
+    assert rows["objective_choice"]["delta"] == pytest.approx(0.15)
+    # score ではなく tanimoto と比べる
+    assert rows["iupac_to_smiles"]["ours"] == 0.964
+    assert rows["iupac_to_smiles"]["delta"] == pytest.approx(0.464)
+    # 指標が違う行は比較しない（生の値のまま残す）
+    assert rows["smiles_to_formula"]["best"] is None
+    assert rows["smiles_to_formula"]["values"] == {"A": 0.5, "B": 0.6}
+    macro = bl.system_macro(rows, doc)
+    assert macro["n_tasks"] == 2
+    assert macro["systems"]["B"] == pytest.approx(0.55)
+    assert macro["ours"] == pytest.approx((0.95 + 0.964) / 2)
+
+
+def test_parse_judgement_recovers_score_from_truncated_output():
+    """reason の途中で出力が切れても、judge が付けた score は回収する。
+
+    実際のフル評価で 9 件がこれで未採点になった（JSON が閉じないため
+    ブロック抽出が失敗する）。score は先頭に出ているので拾える。
+    """
+    from benchmarks_chemeval.judge import parse_judgement
+
+    assert parse_judgement('{"score": 7, "reason": "おおむね正しい"}')["score"] == 0.7
+    truncated = '{"score": 8, "reason": "参照解答の主要要素をすべて含むが、要求された形式では'
+    assert parse_judgement(truncated)["score"] == 0.8
+    assert parse_judgement("採点できません") is None
+
+
 def test_missing_answer_scores_zero_but_marks_unanswered():
     result = score_item("yes_no", None, "Yes")
     assert result["score"] == 0.0 and result["answered"] is False

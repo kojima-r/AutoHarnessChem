@@ -71,6 +71,15 @@ def parse_judgement(text: str) -> dict | None:
     if found:
         raw = float(found.group(1))
         return {"score": max(0.0, min(1.0, raw / 10.0)), "raw_score": raw, "reason": ""}
+    # 長めの reason を書いている途中で出力が打ち切られると JSON が閉じず、
+    # 上のブロック抽出では拾えない。score 自体は先頭に出ているので
+    # キー名として拾う（judge が実際に付けた点を回収するだけで、基準は緩めない）。
+    found = re.search(r'"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)', text)
+    if found:
+        raw = float(found.group(1))
+        reason = re.search(r'"reason"\s*:\s*"(.*)', text, flags=re.DOTALL)
+        return {"score": max(0.0, min(1.0, raw / 10.0)), "raw_score": raw,
+                "reason": (reason.group(1)[:500] if reason else "") + "（出力が打ち切られたため score のみ回収）"}
     return None
 
 
@@ -115,21 +124,32 @@ class Judge:
     async def _ask_claude_sdk(self, prompt: str) -> str:
         from claude_agent_sdk import ClaudeAgentOptions, query
 
+        # max_turns=1 だと、複雑な分子で採点理由が長くなったときに SDK が
+        # `Reached maximum number of turns (1)` をエラーとして返し、採点が
+        # 落ちる（フル評価で実際に 3 件が未採点になった）。ツールは一切
+        # 許可していないので 2 にしても往復が増えるだけで暴走はしない。
         options = ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
             model=self.model,
             allowed_tools=[],
-            max_turns=1,
+            max_turns=2,
         )
         text = ""
-        async for message in query(prompt=prompt, options=options):
-            kind = type(message).__name__
-            if kind == "AssistantMessage":
-                for block in getattr(message, "content", []) or []:
-                    if type(block).__name__ == "TextBlock":
-                        text += getattr(block, "text", "")
-            elif kind == "ResultMessage":
-                text = getattr(message, "result", "") or text
+        try:
+            async for message in query(prompt=prompt, options=options):
+                kind = type(message).__name__
+                if kind == "AssistantMessage":
+                    for block in getattr(message, "content", []) or []:
+                        if type(block).__name__ == "TextBlock":
+                            text += getattr(block, "text", "")
+                elif kind == "ResultMessage":
+                    text = getattr(message, "result", "") or text
+        except Exception:
+            # ターン上限などで打ち切られても、それまでに受け取った判定文は捨てない。
+            # 判定は先頭に {"score": N} を書くので parse_judgement が回収できる
+            # （回収できなければ従来どおり例外として扱う）。
+            if not text:
+                raise
         return text
 
     async def _ask_anthropic(self, prompt: str) -> str:

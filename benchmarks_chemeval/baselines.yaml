@@ -1,0 +1,905 @@
+# ChemEval 論文（ICLR 2026）Table 1 の文献値。
+# 他手法と比べるための出典データで、ahc 側の採点には一切使わない。
+# 転記元は ChemEval/docs/assets/chemeval-text-zero-shot-results.png（論文 Table 1 の図）。
+source:
+  paper: 'ChemEval: A Multi-level and Fine-grained Chemical Capability Evaluation for Large Language Models'
+  venue: ICLR 2026
+  table: 'Table 1: Performance overview of representative multi-level 0-Shot text tasks on ChemEval'
+  url: https://openreview.net/forum?id=JrqjSkEPrX
+  local_figure: benchmarks_chemeval/ChemEval/docs/assets/chemeval-text-zero-shot-results.png
+  transcribed_on: '2026-09-10'
+  notes:
+  - 値は論文の表のまま（0..100 スケール。L2 / NRMSE のみ素の距離）。report では comparable な行を /100 して ahc の 0..1 と並べる。
+  - arXiv:2409.13989 は 42 タスク版の旧稿で数値が異なるため混ぜていない。出典は上記 ICLR 版 Table 1 のみ。
+  - Claude3.7T = Claude 3.7-Sonnet-Thinking。論文は素の LLM を 0-shot で評価しており、ahc は「ツール + Verifier + 再計画ループ」なので同条件の比較ではない。
+  - null は表の '-'（有効な回答が無く指標を計算できなかったもの）。
+systems:
+- OpenAI-o1
+- GPT-4o
+- Claude3.7T
+- Deepseek-R1
+- Deepseek-V3
+- Qwen2.5-72B
+- Llama3.3-8B
+- Gemini-2.5-Pro
+- ChemDFM
+- ChemLLM
+- LlaSMol
+- ChemSpark
+- Chemcrow
+tasks:
+- task_id: objective_choice
+  paper_task: MCTask
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 74.0
+    GPT-4o: 66.8
+    Claude3.7T: 62.8
+    Deepseek-R1: 82.4
+    Deepseek-V3: 76.0
+    Qwen2.5-72B: 67.2
+    Llama3.3-8B: 40.4
+    Gemini-2.5-Pro: 87.6
+    ChemDFM: 41.2
+    ChemLLM: 24.4
+    LlaSMol: 24.0
+    ChemSpark: 43.6
+    Chemcrow: 58.0
+  ours_field: score
+- task_id: objective_true_false
+  paper_task: TFTask
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 46.0
+    GPT-4o: 57.6
+    Claude3.7T: 58.8
+    Deepseek-R1: 75.2
+    Deepseek-V3: 67.2
+    Qwen2.5-72B: 58.4
+    Llama3.3-8B: 46.0
+    Gemini-2.5-Pro: 77.6
+    ChemDFM: 46.0
+    ChemLLM: 19.2
+    LlaSMol: 58.0
+    ChemSpark: 50.0
+    Chemcrow: 74.0
+  ours_field: score
+- task_id: objective_fill_in_blank
+  paper_task: FBTask
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 60.92
+    GPT-4o: 51.19
+    Claude3.7T: 45.28
+    Deepseek-R1: 59.41
+    Deepseek-V3: 63.88
+    Qwen2.5-72B: 53.92
+    Llama3.3-8B: 34.17
+    Gemini-2.5-Pro: 63.95
+    ChemDFM: 24.16
+    ChemLLM: 34.97
+    LlaSMol: 13.92
+    ChemSpark: 24.57
+    Chemcrow: 43.14
+  ours_field: score
+  note: どちらも LLM-as-judge。採点モデルは論文と ahc で異なる
+- task_id: subjective_short_answer
+  paper_task: SATask
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 64.5
+    GPT-4o: 61.2
+    Claude3.7T: 56.7
+    Deepseek-R1: 68.5
+    Deepseek-V3: 71.7
+    Qwen2.5-72B: 58.5
+    Llama3.3-8B: 38.4
+    Gemini-2.5-Pro: 72.0
+    ChemDFM: 32.2
+    ChemLLM: 13.2
+    LlaSMol: 14.5
+    ChemSpark: 33.6
+    Chemcrow: 43.5
+  ours_field: score
+  note: 同上
+- task_id: subjective_calculation
+  paper_task: CalcTask
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 78.0
+    GPT-4o: 61.8
+    Claude3.7T: 55.74
+    Deepseek-R1: 76.1
+    Deepseek-V3: 79.2
+    Qwen2.5-72B: 61.9
+    Llama3.3-8B: 28.0
+    Gemini-2.5-Pro: 82.4
+    ChemDFM: 14.7
+    ChemLLM: 15.9
+    LlaSMol: 7.5
+    ChemSpark: 18.5
+    Chemcrow: 43.5
+  ours_field: score
+  note: 同上
+- task_id: chemical_ner
+  paper_task: CNER
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 64.56
+    GPT-4o: 65.76
+    Claude3.7T: 60.21
+    Deepseek-R1: 64.14
+    Deepseek-V3: 60.85
+    Qwen2.5-72B: 61.61
+    Llama3.3-8B: 55.34
+    Gemini-2.5-Pro: 68.3
+    ChemDFM: 41.17
+    ChemLLM: 0.16
+    LlaSMol: 11.62
+    ChemSpark: 71.44
+    Chemcrow: 57.46
+  ours_field: score
+- task_id: chemical_relation_extraction
+  paper_task: CERC
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 22.37
+    GPT-4o: 25.66
+    Claude3.7T: 25.19
+    Deepseek-R1: 27.18
+    Deepseek-V3: 24.94
+    Qwen2.5-72B: 26.05
+    Llama3.3-8B: 17.31
+    Gemini-2.5-Pro: 25.43
+    ChemDFM: 8.74
+    ChemLLM: 0.24
+    LlaSMol: 1.24
+    ChemSpark: 39.27
+    Chemcrow: 22.05
+  ours_field: score
+- task_id: extract_reaction_substrate
+  paper_task: SubE
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 73.71
+    GPT-4o: 66.32
+    Claude3.7T: 61.59
+    Deepseek-R1: 75.18
+    Deepseek-V3: 61.26
+    Qwen2.5-72B: 62.56
+    Llama3.3-8B: 64.02
+    Gemini-2.5-Pro: 72.05
+    ChemDFM: 20.07
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 74.38
+    Chemcrow: 50.91
+  ours_field: exact_set_match
+  note: 論文は完全一致率。ahc の主指標は集合 F1 なので exact_set_match と比べる
+- task_id: extract_additive
+  paper_task: AddE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 81.67
+    GPT-4o: 85.0
+    Claude3.7T: 79.33
+    Deepseek-R1: 82.67
+    Deepseek-V3: 80.67
+    Qwen2.5-72B: 84.0
+    Llama3.3-8B: 45.81
+    Gemini-2.5-Pro: 95.0
+    ChemDFM: 45.0
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 65.0
+    Chemcrow: 43.33
+  ours_field: score
+- task_id: extract_solvent
+  paper_task: SolvE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 86.5
+    GPT-4o: 85.0
+    Claude3.7T: 87.6
+    Deepseek-R1: 90.2
+    Deepseek-V3: 88.5
+    Qwen2.5-72B: 85.0
+    Llama3.3-8B: 75.47
+    Gemini-2.5-Pro: 83.17
+    ChemDFM: 80.5
+    ChemLLM: 1.67
+    LlaSMol: 0.0
+    ChemSpark: 83.79
+    Chemcrow: 87.5
+  ours_field: score
+- task_id: extract_temperature
+  paper_task: TempE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 70.0
+    GPT-4o: 67.0
+    Claude3.7T: 72.0
+    Deepseek-R1: 65.0
+    Deepseek-V3: 72.0
+    Qwen2.5-72B: 65.0
+    Llama3.3-8B: 62.0
+    Gemini-2.5-Pro: 69.0
+    ChemDFM: 74.33
+    ChemLLM: 3.23
+    LlaSMol: 0.0
+    ChemSpark: 83.0
+    Chemcrow: 65.0
+  ours_field: score
+- task_id: extract_reaction_time
+  paper_task: TimeE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 95.0
+    GPT-4o: 95.0
+    Claude3.7T: 95.0
+    Deepseek-R1: 95.0
+    Deepseek-V3: 95.0
+    Qwen2.5-72B: 90.0
+    Llama3.3-8B: 90.0
+    Gemini-2.5-Pro: 94.0
+    ChemDFM: 78.0
+    ChemLLM: 23.1
+    LlaSMol: 25.0
+    ChemSpark: 95.0
+    Chemcrow: 95.0
+  ours_field: score
+- task_id: extract_reaction_product
+  paper_task: ProdE
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 90.25
+    GPT-4o: 86.09
+    Claude3.7T: 82.39
+    Deepseek-R1: 91.2
+    Deepseek-V3: 87.52
+    Qwen2.5-72B: 84.86
+    Llama3.3-8B: 74.54
+    Gemini-2.5-Pro: 92.82
+    ChemDFM: 34.73
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 94.4
+    Chemcrow: 71.38
+  ours_field: exact_set_match
+  note: 論文は完全一致率。exact_set_match と比べる
+- task_id: extract_characterization
+  paper_task: CharME
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 51.67
+    GPT-4o: 72.85
+    Claude3.7T: 81.01
+    Deepseek-R1: 21.33
+    Deepseek-V3: 81.8
+    Qwen2.5-72B: 74.57
+    Llama3.3-8B: 44.18
+    Gemini-2.5-Pro: 73.11
+    ChemDFM: 27.26
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 12.98
+    Chemcrow: 25.0
+  ours_field: score
+- task_id: extract_catalysis_type
+  paper_task: CatTE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 95.0
+    GPT-4o: 94.0
+    Claude3.7T: 82.0
+    Deepseek-R1: 99.0
+    Deepseek-V3: 100.0
+    Qwen2.5-72B: 100.0
+    Llama3.3-8B: 65.0
+    Gemini-2.5-Pro: 96.0
+    ChemDFM: 49.0
+    ChemLLM: 0.0
+    LlaSMol: 5.0
+    ChemSpark: 31.0
+    Chemcrow: 85.0
+  ours_field: score
+- task_id: extract_yield
+  paper_task: YieldE
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 85.0
+    GPT-4o: 79.0
+    Claude3.7T: 61.0
+    Deepseek-R1: 77.7
+    Deepseek-V3: 65.0
+    Qwen2.5-72B: 65.0
+    Llama3.3-8B: 46.0
+    Gemini-2.5-Pro: 74.0
+    ChemDFM: 45.0
+    ChemLLM: 0.0
+    LlaSMol: 5.0
+    ChemSpark: 61.0
+    Chemcrow: 50.0
+  ours_field: score
+- task_id: abstract_generation
+  paper_task: AbsGen
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 63.75
+    GPT-4o: 63.0
+    Claude3.7T: 63.0
+    Deepseek-R1: 65.0
+    Deepseek-V3: 64.75
+    Qwen2.5-72B: 64.75
+    Llama3.3-8B: 62.0
+    Gemini-2.5-Pro: 67.25
+    ChemDFM: 0.0
+    ChemLLM: 5.5
+    LlaSMol: 26.25
+    ChemSpark: 38.25
+    Chemcrow: 57.5
+  ours_field: score
+- task_id: outline_generation
+  paper_task: OLGen
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 25.0
+    GPT-4o: 35.5
+    Claude3.7T: 26.5
+    Deepseek-R1: 37.0
+    Deepseek-V3: 27.0
+    Qwen2.5-72B: 24.25
+    Llama3.3-8B: 22.75
+    Gemini-2.5-Pro: 39.5
+    ChemDFM: 0.0
+    ChemLLM: 3.75
+    LlaSMol: 31.25
+    ChemSpark: 30.5
+    Chemcrow: 32.5
+  ours_field: score
+- task_id: literature_topic_classification
+  paper_task: TopC
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 55.0
+    GPT-4o: 49.0
+    Claude3.7T: 56.0
+    Deepseek-R1: 57.0
+    Deepseek-V3: 50.0
+    Qwen2.5-72B: 64.0
+    Llama3.3-8B: 32.0
+    Gemini-2.5-Pro: 67.0
+    ChemDFM: 51.0
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 30.0
+    Chemcrow: 45.0
+  ours_field: score
+  note: ahc の contains は単一ラベルの一致率で Accuracy と同義
+- task_id: reaction_type_induction
+  paper_task: ReactTR
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 25.0
+    GPT-4o: 32.0
+    Claude3.7T: 29.0
+    Deepseek-R1: 21.0
+    Deepseek-V3: 28.0
+    Qwen2.5-72B: 22.0
+    Llama3.3-8B: 26.0
+    Gemini-2.5-Pro: 31.0
+    ChemDFM: 13.0
+    ChemLLM: 0.0
+    LlaSMol: 5.0
+    ChemSpark: 17.0
+    Chemcrow: 5.0
+  ours_field: score
+  note: 論文は F1、ahc は単一ラベル一致。厳密には別指標
+- task_id: iupac_to_smiles
+  paper_task: IUPAC2SMILES
+  paper_metric: Tanimoto (valid)
+  comparable: true
+  values:
+    OpenAI-o1: 29.72
+    GPT-4o: 34.71
+    Claude3.7T: 31.89
+    Deepseek-R1: 30.7
+    Deepseek-V3: 46.07
+    Qwen2.5-72B: 15.9
+    Llama3.3-8B: 5.24
+    Gemini-2.5-Pro: 61.35
+    ChemDFM: 46.71
+    ChemLLM: 0.0
+    LlaSMol: 4.7
+    ChemSpark: 87.84
+    Chemcrow: 25.68
+  ours_field: tanimoto
+  note: 論文の主指標は Tanimoto。ahc の score(正準SMILES完全一致)ではなく tanimoto と比べる
+- task_id: smiles_to_iupac
+  paper_task: SMILES2IUPAC
+  paper_metric: Exact Match
+  comparable: true
+  values:
+    OpenAI-o1: 0.0
+    GPT-4o: 0.0
+    Claude3.7T: 0.0
+    Deepseek-R1: 1.2
+    Deepseek-V3: 0.0
+    Qwen2.5-72B: 0.0
+    Llama3.3-8B: 0.0
+    Gemini-2.5-Pro: 1.2
+    ChemDFM: 0.0
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 14.0
+    Chemcrow: 0.0
+  ours_field: score
+  note: ahc の score は小文字化した完全一致で論文の Exact Match と同義
+- task_id: smiles_selfies_translation
+  paper_task: S2S
+  paper_metric: Tanimoto (valid)
+  comparable: true
+  values:
+    OpenAI-o1: 9.72
+    GPT-4o: 13.41
+    Claude3.7T: 9.37
+    Deepseek-R1: 16.04
+    Deepseek-V3: 16.27
+    Qwen2.5-72B: 11.47
+    Llama3.3-8B: 1.74
+    Gemini-2.5-Pro: 13.13
+    ChemDFM: 2.12
+    ChemLLM: 0.0
+    LlaSMol: 0.6
+    ChemSpark: 87.36
+    Chemcrow: 9.83
+  ours_field: tanimoto
+  note: 論文の主指標は Tanimoto
+- task_id: molecular_description
+  paper_task: Mol2PC
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 19.0
+    GPT-4o: 7.0
+    Claude3.7T: 9.8
+    Deepseek-R1: 11.9
+    Deepseek-V3: 13.5
+    Qwen2.5-72B: 20.8
+    Llama3.3-8B: 2.1
+    Gemini-2.5-Pro: 0.7
+    ChemDFM: 3.1
+    ChemLLM: 0.3
+    LlaSMol: 0.0
+    ChemSpark: 48.9
+    Chemcrow: 21.0
+  ours_field: score
+- task_id: condition_ligand
+  paper_task: LRec
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 0.0
+    GPT-4o: 13.2
+    Claude3.7T: 2.0
+    Deepseek-R1: 6.8
+    Deepseek-V3: 7.6
+    Qwen2.5-72B: 4.4
+    Llama3.3-8B: 2.13
+    Gemini-2.5-Pro: 0.0
+    ChemDFM: 26.0
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 37.6
+    Chemcrow: 18.0
+  ours_field: score
+- task_id: condition_reagent
+  paper_task: RRec
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 25.64
+    GPT-4o: 15.8
+    Claude3.7T: 27.43
+    Deepseek-R1: 21.93
+    Deepseek-V3: 8.35
+    Qwen2.5-72B: 37.75
+    Llama3.3-8B: 8.78
+    Gemini-2.5-Pro: 0.73
+    ChemDFM: 13.13
+    ChemLLM: 0.0
+    LlaSMol: 0.5
+    ChemSpark: 63.72
+    Chemcrow: 36.65
+  ours_field: score
+- task_id: condition_solvent
+  paper_task: SolvRec
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 10.0
+    GPT-4o: 20.4
+    Claude3.7T: 18.8
+    Deepseek-R1: 22.4
+    Deepseek-V3: 24.0
+    Qwen2.5-72B: 50.4
+    Llama3.3-8B: 3.63
+    Gemini-2.5-Pro: 0.0
+    ChemDFM: 10.53
+    ChemLLM: 0.0
+    LlaSMol: 0.5
+    ChemSpark: 30.4
+    Chemcrow: 12.0
+  ours_field: score
+- task_id: condition_catalyst
+  paper_task: CatRec
+  paper_metric: F1
+  comparable: true
+  values:
+    OpenAI-o1: 0.0
+    GPT-4o: 0.0
+    Claude3.7T: 0.0
+    Deepseek-R1: 0.0
+    Deepseek-V3: 0.0
+    Qwen2.5-72B: 0.0
+    Llama3.3-8B: 0.0
+    Gemini-2.5-Pro: 0.0
+    ChemDFM: 0.0
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 0.5
+    Chemcrow: 0.0
+  ours_field: score
+- task_id: reaction_yield_prediction
+  paper_task: YPred
+  paper_metric: Accuracy
+  comparable: true
+  values:
+    OpenAI-o1: 12.0
+    GPT-4o: 43.5
+    Claude3.7T: 16.0
+    Deepseek-R1: 11.0
+    Deepseek-V3: 22.5
+    Qwen2.5-72B: 26.0
+    Llama3.3-8B: 35.5
+    Gemini-2.5-Pro: 17.5
+    ChemDFM: 7.2
+    ChemLLM: 0.0
+    LlaSMol: 28.0
+    ChemSpark: 72.0
+    Chemcrow: 24.0
+  ours_field: score
+- task_id: activation_energy_range
+  paper_task: RatePred
+  paper_metric: Overlap
+  comparable: true
+  values:
+    OpenAI-o1: 21.08
+    GPT-4o: 13.81
+    Claude3.7T: 9.06
+    Deepseek-R1: 17.12
+    Deepseek-V3: 17.71
+    Qwen2.5-72B: 10.71
+    Llama3.3-8B: 6.92
+    Gemini-2.5-Pro: 27.01
+    ChemDFM: 3.79
+    ChemLLM: 0.0
+    LlaSMol: 3.68
+    ChemSpark: 2.9
+    Chemcrow: 0.0
+  ours_field: score
+- task_id: reaction_intermediate
+  paper_task: IMDer
+  paper_metric: LLM Score
+  comparable: true
+  values:
+    OpenAI-o1: 80.0
+    GPT-4o: 81.5
+    Claude3.7T: 81.5
+    Deepseek-R1: 79.5
+    Deepseek-V3: 80.5
+    Qwen2.5-72B: 77.25
+    Llama3.3-8B: 81.25
+    Gemini-2.5-Pro: 82.25
+    ChemDFM: 76.0
+    ChemLLM: 4.75
+    LlaSMol: 1.5
+    ChemSpark: 92.75
+    Chemcrow: 28.75
+  ours_field: score
+- task_id: name_generation_from_text
+  paper_task: MolNG
+  paper_metric: Tanimoto (valid)
+  comparable: false
+  values:
+    OpenAI-o1: 49.8
+    GPT-4o: 39.3
+    Claude3.7T: 33.85
+    Deepseek-R1: 56.05
+    Deepseek-V3: 51.19
+    Qwen2.5-72B: 20.58
+    Llama3.3-8B: 5.83
+    Gemini-2.5-Pro: 71.11
+    ChemDFM: 47.06
+    ChemLLM: 0.0
+    LlaSMol: 3.71
+    ChemSpark: 74.81
+    Chemcrow: 40.92
+  note: 論文は Tanimoto、ahc は LLM-as-judge。比較不可
+- task_id: iupac_to_formula
+  paper_task: IUPAC2MF
+  paper_metric: L2
+  comparable: false
+  values:
+    OpenAI-o1: 0.7737
+    GPT-4o: 0.5304
+    Claude3.7T: 0.3252
+    Deepseek-R1: 0.6026
+    Deepseek-V3: 0.6176
+    Qwen2.5-72B: 0.3407
+    Llama3.3-8B: 0.2433
+    Gemini-2.5-Pro: 0.8382
+    ChemDFM: 0.6119
+    ChemLLM: 0.0454
+    LlaSMol: 0.0
+    ChemSpark: 0.8807
+    Chemcrow: 0.1408
+  note: 論文は原子組成ベクトルの L2 距離（小さいほど良い）。ahc は一致率 + cos
+- task_id: smiles_to_formula
+  paper_task: SMILES2MF
+  paper_metric: L2
+  comparable: false
+  values:
+    OpenAI-o1: 0.633
+    GPT-4o: 0.3627
+    Claude3.7T: 0.3618
+    Deepseek-R1: 0.4402
+    Deepseek-V3: 0.3563
+    Qwen2.5-72B: 0.2448
+    Llama3.3-8B: 0.1728
+    Gemini-2.5-Pro: 0.6574
+    ChemDFM: 0.6399
+    ChemLLM: 0.0375
+    LlaSMol: 0.0
+    ChemSpark: 0.8133
+    Chemcrow: 0.3089
+  note: 同上
+- task_id: retro_substrate_recommendation
+  paper_task: SubRec
+  paper_metric: F1
+  comparable: false
+  values:
+    OpenAI-o1: 1.0
+    GPT-4o: 0.0
+    Claude3.7T: 1.46
+    Deepseek-R1: 1.63
+    Deepseek-V3: 2.27
+    Qwen2.5-72B: 1.06
+    Llama3.3-8B: 0.27
+    Gemini-2.5-Pro: 0.0
+    ChemDFM: 3.99
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 12.37
+    Chemcrow: 0.0
+  note: 論文は前駆体集合の F1、ahc は正準 SMILES 完全一致。比較不可
+- task_id: reaction_product_prediction
+  paper_task: PPred
+  paper_metric: F1
+  comparable: false
+  values:
+    OpenAI-o1: 21.33
+    GPT-4o: 1.67
+    Claude3.7T: 12.27
+    Deepseek-R1: 11.97
+    Deepseek-V3: 0.93
+    Qwen2.5-72B: 1.73
+    Llama3.3-8B: 0.0
+    Gemini-2.5-Pro: 29.2
+    ChemDFM: 18.8
+    ChemLLM: 0.0
+    LlaSMol: 16.0
+    ChemSpark: 56.4
+    Chemcrow: 0.0
+  note: 同上
+- task_id: retro_single_step_route
+  paper_task: PathRec
+  paper_metric: LLM Score
+  comparable: false
+  values:
+    OpenAI-o1: 30.63
+    GPT-4o: 22.88
+    Claude3.7T: 0.36
+    Deepseek-R1: 52.75
+    Deepseek-V3: 37.38
+    Qwen2.5-72B: 41.13
+    Llama3.3-8B: 20.88
+    Gemini-2.5-Pro: 43.75
+    ChemDFM: 24.13
+    ChemLLM: 10.88
+    LlaSMol: 10.0
+    ChemSpark: 38.75
+    Chemcrow: 48.75
+  note: 論文 Table 1 の PathRec は 1 行のみで、単段/多段のどちらに対応するか確定できない
+- task_id: retro_multi_step_route
+  paper_task: PathRec
+  paper_metric: LLM Score
+  comparable: false
+  values:
+    OpenAI-o1: 30.63
+    GPT-4o: 22.88
+    Claude3.7T: 0.36
+    Deepseek-R1: 52.75
+    Deepseek-V3: 37.38
+    Qwen2.5-72B: 41.13
+    Llama3.3-8B: 20.88
+    Gemini-2.5-Pro: 43.75
+    ChemDFM: 24.13
+    ChemLLM: 10.88
+    LlaSMol: 10.0
+    ChemSpark: 38.75
+    Chemcrow: 48.75
+  note: 同上
+- task_id: synthetic_difficulty
+  paper_task: SynDE
+  paper_metric: NRMSE (valid)
+  comparable: false
+  values:
+    OpenAI-o1: null
+    GPT-4o: null
+    Claude3.7T: null
+    Deepseek-R1: null
+    Deepseek-V3: null
+    Qwen2.5-72B: 0.267
+    Llama3.3-8B: null
+    Gemini-2.5-Pro: null
+    ChemDFM: null
+    ChemLLM: 33.0049
+    LlaSMol: 1.2374
+    ChemSpark: 1.7992
+    Chemcrow: null
+  note: 論文は NRMSE（正規化済み）、ahc は RMSE。尺度が違う
+- task_id: condition_temperature
+  paper_task: TempRec
+  paper_metric: NRMSE (valid)
+  comparable: false
+  values:
+    OpenAI-o1: 0.3278
+    GPT-4o: 0.2545
+    Claude3.7T: 0.2263
+    Deepseek-R1: 0.2078
+    Deepseek-V3: 0.2096
+    Qwen2.5-72B: 0.3782
+    Llama3.3-8B: null
+    Gemini-2.5-Pro: 0.1814
+    ChemDFM: 0.3811
+    ChemLLM: 1.1184
+    LlaSMol: 0.8658
+    ChemSpark: 0.2742
+    Chemcrow: 0.2392
+  note: 同上
+- task_id: condition_time
+  paper_task: TimeRec
+  paper_metric: NRMSE (valid)
+  comparable: false
+  values:
+    OpenAI-o1: 0.2746
+    GPT-4o: 0.2468
+    Claude3.7T: 0.3662
+    Deepseek-R1: 0.2291
+    Deepseek-V3: 0.2579
+    Qwen2.5-72B: 0.2022
+    Llama3.3-8B: null
+    Gemini-2.5-Pro: 0.2425
+    ChemDFM: 0.4732
+    ChemLLM: 1.7937
+    LlaSMol: 0.4351
+    ChemSpark: 0.3937
+    Chemcrow: 0.5209
+  note: 同上
+aggregates:
+- paper_task: MolPC
+  paper_metric: Accuracy
+  task_ids:
+  - property_bbbp
+  - property_clintox
+  - property_hiv
+  - property_sider
+  - property_polarity_classification
+  comparable: true
+  note: 論文は分子性質の分類タスクを 1 行に集約。ahc 側は該当 5 タスクのスコア平均と比べる
+  values:
+    OpenAI-o1: 67.5
+    GPT-4o: 64.57
+    Claude3.7T: 58.9
+    Deepseek-R1: 53.54
+    Deepseek-V3: 48.73
+    Qwen2.5-72B: 48.13
+    Llama3.3-8B: 47.26
+    Gemini-2.5-Pro: 63.63
+    ChemDFM: 61.35
+    ChemLLM: 0.0
+    LlaSMol: 46.5
+    ChemSpark: 85.57
+    Chemcrow: 46.0
+- paper_task: MolPR
+  paper_metric: NRMSE (valid)
+  task_ids:
+  - property_esol
+  - property_lipo
+  - property_homo
+  - property_lumo
+  - property_melting_point
+  - property_boiling_point
+  - property_polarity_regression
+  comparable: false
+  note: 論文は NRMSE（正規化済み）で回帰タスクを集約。ahc は素の RMSE なので比較不可
+  values:
+    OpenAI-o1: 12.3852
+    GPT-4o: 9.9322
+    Claude3.7T: 13.9702
+    Deepseek-R1: 15.8881
+    Deepseek-V3: 8.3675
+    Qwen2.5-72B: 13.0756
+    Llama3.3-8B: 61.4736
+    Gemini-2.5-Pro: 11.727
+    ChemDFM: 394.9424
+    ChemLLM: 179.3606
+    LlaSMol: 29.9686
+    ChemSpark: 1.2142
+    Chemcrow: 0.3408
+extra_rows:
+- paper_task: SMILES2IUPAC
+  paper_metric: BLEU
+  values:
+    OpenAI-o1: 3.24
+    GPT-4o: 0.96
+    Claude3.7T: 3.27
+    Deepseek-R1: 4.17
+    Deepseek-V3: 1.67
+    Qwen2.5-72B: 0.33
+    Llama3.3-8B: 0.44
+    Gemini-2.5-Pro: 13.55
+    ChemDFM: 0.56
+    ChemLLM: 0.0
+    LlaSMol: 0.0
+    ChemSpark: 48.25
+    Chemcrow: 0.38
+  note: ahc の bleu4 / 参考値
+- paper_task: SMILES2IUPAC
+  paper_metric: Tanimoto
+  values:
+    OpenAI-o1: 0.0
+    GPT-4o: 12.08
+    Claude3.7T: 22.73
+    Deepseek-R1: 25.9
+    Deepseek-V3: 19.16
+    Qwen2.5-72B: 13.01
+    Llama3.3-8B: 3.71
+    Gemini-2.5-Pro: 56.82
+    ChemDFM: 2.06
+    ChemLLM: 0.0
+    LlaSMol: 2.22
+    ChemSpark: 66.26
+    Chemcrow: 0.0
+  note: ahc の bleu4 / 参考値
