@@ -122,14 +122,42 @@ def system_macro(rows: dict[str, dict], baselines: dict | None = None) -> dict:
             "systems": dict(sorted(per_system.items(), key=lambda kv: -kv[1]))}
 
 
-def compare(tasks: dict[str, dict], baselines: dict | None = None) -> dict:
+def compare_column(rows: dict[str, dict], macro: dict, other_tasks: dict[str, dict],
+                   label: str) -> dict:
+    """別 run（例: 素の LLM ベースライン）を比較列として並べるための値。
+
+    ahc 側と**同じ `ours_field`** で値を取り、マクロ平均は文献値と同じタスク集合で
+    出す（そのうち相手側にも値がある分だけ。n を併記して母集団の違いを判るようにする）。
+    """
+    subset = list(macro.get("task_ids") or [])
+    values: dict[str, float | None] = {}
+    for task_id in subset:
+        row, summary = rows.get(task_id) or {}, other_tasks.get(task_id)
+        values[task_id] = (_ours(summary, row.get("ours_field") or "score")
+                           if summary is not None else None)
+    usable = [v for v in values.values() if v is not None]
+    return {"label": label, "tasks": values, "n_tasks": len(usable),
+            "macro": round(sum(usable) / len(usable), 4) if usable else None,
+            # 同じ母集団で比べた ahc 側の平均（相手に欠測があると全体平均とずれるため）
+            "ours_macro_same_subset": round(
+                sum(rows[t]["ours"] for t in subset if values[t] is not None)
+                / len(usable), 4) if usable else None}
+
+
+def compare(tasks: dict[str, dict], baselines: dict | None = None,
+            other_tasks: dict[str, dict] | None = None,
+            other_label: str | None = None) -> dict:
     """レポート用にまとめたもの。"""
     baselines = baselines if baselines is not None else load_baselines()
     if not baselines:
         return {}
     rows = task_rows(tasks, baselines)
-    return {"source": baselines.get("source", {}),
-            "systems": baselines.get("systems", []),
-            "tasks": rows,
-            "aggregates": aggregate_rows(tasks, baselines),
-            "macro": system_macro(rows, baselines)}
+    macro = system_macro(rows, baselines)
+    out = {"source": baselines.get("source", {}),
+           "systems": baselines.get("systems", []),
+           "tasks": rows,
+           "aggregates": aggregate_rows(tasks, baselines),
+           "macro": macro}
+    if other_tasks is not None and other_label:
+        out["compare"] = compare_column(rows, macro, other_tasks, other_label)
+    return out

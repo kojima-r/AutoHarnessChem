@@ -24,6 +24,20 @@ class AdapterUnavailable(RuntimeError):
         self.provider = provider
 
 
+def real_model_name(value) -> str | None:
+    """SDK が報告したモデル名のうち、実在するモデル id だけを返す。
+
+    claude-agent-sdk は合成メッセージに `<synthetic>` のような擬似モデル名を載せる。
+    これを拾うと「どのモデルの成績か」が判らなくなるため、山括弧で囲まれた
+    プレースホルダは無視する。
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    if value.startswith("<") and value.endswith(">"):
+        return None
+    return value
+
+
 class BaseAdapter(ABC):
     name: str = "base"
 

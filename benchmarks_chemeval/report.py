@@ -57,12 +57,17 @@ def summarize_group(records: list[dict]) -> dict:
         "scored": len(scores),
         "answered_rate": _mean([float(bool(r.get("answered"))) for r in records]),
         "valid_rate": _mean([float(bool(r.get("valid"))) for r in records]),
-        "harness_passed_rate": _mean([float(bool(r.get("harness_passed"))) for r in records]),
+        # bare モードは Verifier を通していない（harness_passed=None）。None を 0 と
+        # 数えると「Verifier に落ちた」と読めてしまうので、母集団から除いて None を返す
+        "harness_passed_rate": _mean([float(bool(r.get("harness_passed"))) for r in records
+                                      if r.get("harness_passed") is not None]),
         "error_count": sum(1 for r in records if r.get("error")),
         "mean_attempts": _mean([float(a) for a in attempts]),
         "mean_elapsed_sec": _mean([float(e) for e in elapsed]),
         "metrics": metrics,
         "answer_sources": _count(records, "answer_source"),
+        # どのモデルの成績かを明示する（文献値と並べる以上、必須の情報）
+        "models": _count([r for r in records if r.get("model")], "model"),
     }
 
 
@@ -81,11 +86,24 @@ def _group(records: list[dict], field: str) -> dict[str, list[dict]]:
     return grouped
 
 
-def summarize(records: list[dict], label: str = "chemeval") -> dict:
-    """provider ごと・レベルごと・次元ごと・タスクごとの集計をまとめる。"""
+def task_summaries(records: list[dict]) -> dict[str, dict]:
+    """task_id → 集計（provider をまたいでまとめる。比較列の材料）。"""
+    return {task_id: summarize_group(rows)
+            for task_id, rows in _group(records, "task_id").items()}
+
+
+def summarize(records: list[dict], label: str = "chemeval",
+              compare_records: list[dict] | None = None,
+              compare_label: str | None = None) -> dict:
+    """provider ごと・レベルごと・次元ごと・タスクごとの集計をまとめる。
+
+    `compare_records` を渡すと、別 run（素の LLM ベースラインなど）を
+    比較列として文献値の表に並べる。
+    """
     catalog = load_catalog()
     order = {task.id: i for i, task in enumerate(catalog)}
     summary: dict = {"label": label, "n_records": len(records), "providers": {}}
+    other = task_summaries(compare_records) if compare_records else None
     for provider, provider_records in sorted(_group(records, "provider").items()):
         levels = {}
         for level in LEVELS:
@@ -117,7 +135,8 @@ def summarize(records: list[dict], label: str = "chemeval") -> dict:
         summary["providers"][provider] = {
             "overall": overall, "levels": levels,
             # 論文 Table 1 の文献値との突き合わせ（採点には影響しない）
-            "baselines": baselines.compare(all_tasks),
+            "baselines": baselines.compare(all_tasks, other_tasks=other,
+                                           other_label=compare_label),
         }
     return summary
 
@@ -155,14 +174,41 @@ def _render_baselines(compare: dict) -> list[str]:
              "  「ツール（量子化学計算・反応予測・逆合成）+ Verifier + 再計画ループ」なので、",
              "  差はモデル性能だけでなく harness の寄与も含む。",
              ""]
+    column = compare.get("compare") or {}
     if macro.get("n_tasks"):
         lines += [f"指標が一致する {macro['n_tasks']} タスクだけを母集団にしたマクロ平均"
                   "（全手法で同じタスク集合）:", "",
                   "| 手法 | マクロ平均 |", "| --- | --: |",
                   f"| **ahc（この run）** | **{_fmt(macro['ours'])}** |"]
+        if column.get("macro") is not None:
+            lines.append(f"| 素の LLM（`{column['label']}` / ツールなし 1 ターン、"
+                         f"{column['n_tasks']} タスク） | {_fmt(column['macro'])} |")
         for system, value in macro["systems"].items():
             lines.append(f"| {system} | {_fmt(value)} |")
         lines.append("")
+    if column.get("macro") is not None:
+        gap = None
+        if column.get("ours_macro_same_subset") is not None:
+            gap = round(column["ours_macro_same_subset"] - column["macro"], 4)
+        lines += [f"`{column['label']}` は同じ問題・同じ採点で**ツールも Verifier も再計画も"
+                  "使わずに**解かせた結果。ahc との差が harness の寄与にあたる:", "",
+                  f"- 同一母集団（{column['n_tasks']} タスク）での ahc: "
+                  f"**{_fmt(column.get('ours_macro_same_subset'))}** / "
+                  f"素の LLM: **{_fmt(column['macro'])}** / 差: "
+                  f"**{'+' if gap is not None and gap > 0 else ''}{_fmt(gap)}**", ""]
+        rows_with = [(t, rows[t], v) for t, v in column["tasks"].items() if v is not None]
+        if rows_with:
+            lines += ["| task | 比較指標 | ahc | 素の LLM | 差 | 文献最高 | その手法 |",
+                      "| --- | --- | --: | --: | --: | --: | --- |"]
+            for task_id, row, value in sorted(rows_with,
+                                              key=lambda x: (x[1]["ours"] or 0) - x[2]):
+                diff = round((row["ours"] or 0) - value, 4)
+                lines.append(
+                    f"| {task_id} | {row.get('ours_field') or 'score'} "
+                    f"| {_fmt(row['ours'])} | {_fmt(value)} "
+                    f"| {'+' if diff > 0 else ''}{_fmt(diff)} "
+                    f"| {_fmt(row['best'])} | {row['best_system'] or '-'} |")
+            lines.append("")
     aggregates = [a for a in (compare.get("aggregates") or []) if a["comparable"]]
     if aggregates:
         lines += ["論文が複数タスクを 1 行に集約している項目:", "",
@@ -207,6 +253,7 @@ def render_markdown(summary: dict) -> str:
             f"平均所要: {_fmt(overall['mean_elapsed_sec'], 1)}s / "
             f"実行エラー: {overall['error_count']} 件",
             f"- 答えの取得元: {overall['answer_sources']}",
+            f"- 実行モデル: {overall['models'] or '記録なし（この run より前の実装）'}",
             "",
             "### レベル別", "",
             "| level | n | score | 回答率 | Verifier 合格率 | 主要指標 |",
@@ -259,11 +306,14 @@ def render_markdown(summary: dict) -> str:
     return "\n".join(lines)
 
 
-def write_report(records: list[dict], out_dir: Path, label: str = "chemeval") -> dict:
+def write_report(records: list[dict], out_dir: Path, label: str = "chemeval",
+                 compare_records: list[dict] | None = None,
+                 compare_label: str | None = None) -> dict:
     """metrics.json / report.md / scored.jsonl を書く。"""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary = summarize(records, label)
+    summary = summarize(records, label, compare_records=compare_records,
+                        compare_label=compare_label)
     (out_dir / "metrics.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "report.md").write_text(render_markdown(summary), encoding="utf-8")

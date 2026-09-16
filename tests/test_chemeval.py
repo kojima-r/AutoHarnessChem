@@ -8,6 +8,9 @@
 """
 import asyncio
 import json
+import sys
+import types
+from unittest import mock
 from pathlib import Path
 
 import pytest
@@ -169,6 +172,164 @@ def test_judge_metric_is_excluded_without_judge():
     with_judge = score_item("judge", "なにか答えた", "参照解答",
                             {"judge": {"score": 0.8, "reason": "おおむね正しい"}})
     assert with_judge["score"] == 0.8
+
+
+# --- 素の LLM ベースライン（bare モード）--------------------------------
+
+class StubBareModel:
+    """1 ターン問い合わせのスタブ（SDK を要求しない）。"""
+
+    def __init__(self, answers: dict[str, str]):
+        self.answers = answers
+        self.reported_model = "stub-model-1"
+        self.asked: list[str] = []
+
+    async def ask(self, prompt: str) -> str:
+        self.asked.append(prompt)
+        for key, text in self.answers.items():
+            if key in prompt:
+                return text
+        return ""
+
+
+def test_bare_mode_answers_without_harness(tmp_path):
+    from benchmarks_chemeval import bare
+
+    items = dataset.load_items(path=_fixture_jsonl(tmp_path), limit_per_task=1,
+                              auto_prepare=False)
+    asker = StubBareModel({"Q1 選択問題": '{"answer": "C"}',
+                           "BBBP": '{"answer": "No"}'})
+    records_path = tmp_path / "bare" / "records.jsonl"
+    runner_config = runner.RunnerConfig(label="bare-test", providers=("claude",),
+                                        concurrency=2)
+    produced = asyncio.run(
+        bare.run_items_bare(items, runner_config, records_path, asker=asker))
+
+    assert len(produced) == len(items)
+    by_task = {r["task_id"]: r for r in produced}
+    # 問題文は原文のまま渡す（答えファイルの指示を足さない = 論文と同条件）
+    assert all(ANSWER_FILE not in prompt for prompt in asker.asked)
+    assert by_task["objective_choice"]["answer"] == "C"
+    assert by_task["objective_choice"]["mode"] == "bare"
+    assert by_task["objective_choice"]["model"] == "stub-model-1"
+    # harness を通していないので Verifier の結果は持たない
+    assert by_task["objective_choice"]["harness_passed"] is None
+    # 採点は harness 側と同じ経路
+    scored = asyncio.run(score.score_records(produced, config=None, judge=None,
+                                             use_chem=False))
+    assert {r["task_id"]: r["score"] for r in scored}["objective_choice"] == 1.0
+    # 再実行すると記録済みは飛ばす（枠をまたいだ再開ができる）
+    again = asyncio.run(
+        bare.run_items_bare(items, runner_config, records_path, asker=asker))
+    assert again == []
+
+
+def test_bare_mode_disables_tools_and_rejects_tool_use():
+    """素の LLM ベースラインでツールを使わせない。
+
+    `allowed_tools=[]` は「許可リスト未指定」の意味でツールは無効にならず、
+    初回の bare 実行ではモデルが Bash から selfies ライブラリを呼んで答えていた
+    （= 素の LLM ではない）。ツールセット自体を空にする `tools=[]` が必要。
+    """
+    from benchmarks_chemeval import bare
+
+    captured = {}
+
+    class FakeOptions:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class ToolUseBlock:
+        name = "Bash"
+
+    class AssistantMessage:
+        content = [ToolUseBlock()]
+
+    async def fake_query(prompt, options):
+        for message in [AssistantMessage()]:
+            yield message
+
+    module = types.ModuleType("claude_agent_sdk")
+    module.ClaudeAgentOptions = FakeOptions
+    module.query = fake_query
+    with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+        asker = bare.BareModel(model="claude-opus-5")
+        with pytest.raises(bare.ToolUseDetected):
+            asyncio.run(asker.ask("SMILES を SELFIES に変換してください"))
+    # ツールセットを空にして渡していること
+    assert captured["tools"] == []
+    assert captured["max_turns"] >= 2
+
+
+def test_bare_mode_treats_usage_limit_message_as_failure(tmp_path):
+    """枠切れの本文を答えとして記録しない（記録すると再実行できなくなる）。
+
+    SDK は枠切れを例外ではなく `You've hit your session limit · resets ...` という
+    応答本文で返す。初回の bare 実行ではこれを答えとして採用してしまい、
+    2,210 問中 1,346 問が「回答済みだが 0 点」として確定していた。
+    """
+    from benchmarks_chemeval import bare
+
+    items = dataset.load_items(path=_fixture_jsonl(tmp_path), limit_per_task=1,
+                              auto_prepare=False)
+    asker = StubBareModel({"": "You've hit your session limit · resets 4:50am (Asia/Tokyo)"})
+    # スタブは素通しなので、実装側の判定を通すために ask をラップする
+    raw_ask = asker.ask
+
+    async def ask(prompt):
+        text = await raw_ask(prompt)
+        if bare._LIMIT_MESSAGE.search(text):
+            raise bare.UsageLimitReached(text)
+        return text
+
+    asker.ask = ask
+    records_path = tmp_path / "limit" / "records.jsonl"
+    runner_config = runner.RunnerConfig(label="limit-test", providers=("claude",),
+                                        concurrency=2)
+    produced = asyncio.run(
+        bare.run_items_bare(items, runner_config, records_path, asker=asker))
+    assert produced and all(r["answer"] is None for r in produced)
+    assert all("UsageLimitReached" in (r["error"] or "") for r in produced)
+    # answer が無いので purge の対象になり、枠が戻れば解き直せる
+    assert all(r["answer_source"] == "none" for r in produced)
+
+
+def test_synthetic_model_names_are_ignored():
+    """SDK の `<synthetic>` を実行モデルとして記録しない。
+
+    bare の初回実行で 2,210 件のうち 1,349 件がこれで `<synthetic>` になり、
+    「どのモデルの成績か」が言えなくなった。
+    """
+    from adapters.base import real_model_name
+
+    assert real_model_name("claude-opus-5") == "claude-opus-5"
+    assert real_model_name("<synthetic>") is None
+    assert real_model_name("") is None
+    assert real_model_name(None) is None
+
+
+def test_compare_column_uses_same_field_and_subset():
+    """比較列は ahc 側と同じ指標で取り、母集団を揃える。"""
+    from benchmarks_chemeval import baselines as bl
+
+    doc = {"systems": ["A"],
+           "tasks": [{"task_id": "objective_choice", "paper_task": "MCTask",
+                      "paper_metric": "Accuracy", "comparable": True,
+                      "ours_field": "score", "values": {"A": 50.0}},
+                     {"task_id": "iupac_to_smiles", "paper_task": "IUPAC2SMILES",
+                      "paper_metric": "Tanimoto (valid)", "comparable": True,
+                      "ours_field": "tanimoto", "values": {"A": 30.0}}],
+           "aggregates": []}
+    ours = {"objective_choice": {"score": 0.9, "metrics": {}},
+            "iupac_to_smiles": {"score": 0.6, "metrics": {"tanimoto": 0.8}}}
+    # 相手側は 1 タスクだけ持つ（母集団が揃うか）
+    other = {"objective_choice": {"score": 0.5, "metrics": {}}}
+    out = bl.compare(ours, doc, other_tasks=other, other_label="bare")
+    column = out["compare"]
+    assert column["n_tasks"] == 1
+    assert column["macro"] == 0.5
+    assert column["ours_macro_same_subset"] == 0.9      # 全体平均(0.85)ではない
+    assert column["tasks"]["iupac_to_smiles"] is None
 
 
 # --- 文献値（論文 Table 1）------------------------------------------------

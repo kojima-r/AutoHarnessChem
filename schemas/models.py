@@ -154,6 +154,8 @@ class RunState(BaseModel):
     attempts: int = 0
     workspace: str = ""
     session_ref: str | None = None  # SDK側の session/thread id（resume 用）
+    # SDK が実際に使ったモデル（`model: default` のときに何が動いたかを残すため）
+    model: str | None = None
     # 実時間上限を延長した回数と、延長で足した合計秒数
     timeout_extensions: int = 0
     extended_sec: int = 0
@@ -163,6 +165,9 @@ class RunReport(BaseModel):
     run_id: str
     task: TaskSpec
     provider: Provider
+    # 実行に使われたモデル名。config が `default` でも SDK の報告値を残す
+    # （後から「どのモデルの成績か」を言えるようにするため）
+    model: str | None = None
     passed: bool
     attempts: int
     # 実時間上限を延長した回数 / 追加した秒数（長時間実行の記録）

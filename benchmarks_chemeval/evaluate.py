@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from benchmarks_chemeval import dataset, report, runner, score  # noqa: E402
+from benchmarks_chemeval import bare, dataset, report, runner, score  # noqa: E402
 from benchmarks_chemeval.catalog import LEVELS, load_catalog  # noqa: E402
 from benchmarks_chemeval.judge import Judge  # noqa: E402
 from benchmarks_chemeval.metrics import METRICS  # noqa: E402
@@ -78,12 +78,19 @@ def build_parser() -> argparse.ArgumentParser:
                        help="実行のみ（採点は後で score サブコマンドで行う）")
     p_run.add_argument("--dry-run", action="store_true", dest="dry_run",
                        help="対象問題数だけ表示して終了する")
+    p_run.add_argument("--bare", action="store_true",
+                       help="harness を通さず素の LLM に 1 ターンで解かせる"
+                            "（ツールなし。論文と同条件のベースライン用）")
+    p_run.add_argument("--model", help="--bare で使うモデル名（既定は SDK の既定モデル）")
 
     p_score = sub.add_parser("score", help="既存の records.jsonl を採点し直す")
     p_score.add_argument("--label", default="chemeval")
     p_score.add_argument("--judge", default="none")
     p_score.add_argument("--judge-model", dest="judge_model")
     p_score.add_argument("--no-chem", action="store_true", dest="no_chem")
+    p_score.add_argument("--compare-label", dest="compare_label",
+                         help="別の label の結果を比較列として並べる"
+                              "（例: 素の LLM ベースラインの label）")
     return parser
 
 
@@ -179,7 +186,13 @@ def cmd_run(args, config) -> int:
         label=args.label, providers=providers, concurrency=args.concurrency,
         item_timeout_sec=args.item_timeout, max_replans=args.max_replans,
         cleanup_workspaces=args.cleanup_workspaces, overwrite=args.overwrite)
-    asyncio.run(runner.run_items(config, items, runner_config, records_path))
+    if getattr(args, "bare", False):
+        # 素の LLM ベースライン（ツールも Verifier も再計画も使わない）
+        print("[chemeval] bare モード: ツールなし・1 ターンで解かせます")
+        asyncio.run(bare.run_items_bare(items, runner_config, records_path,
+                                        model=getattr(args, "model", None)))
+    else:
+        asyncio.run(runner.run_items(config, items, runner_config, records_path))
 
     if args.no_score:
         print(f"[chemeval] records: {records_path}（採点は score サブコマンドで）")
@@ -206,7 +219,19 @@ def _score_and_report(args, config, out_dir: Path, records_path: Path) -> int:
         records, config=config, judge=judge,
         workspace=config.paths.workspaces / f"chemeval-scoring-{args.label}",
         use_chem=not args.no_chem))
-    summary = report.write_report(scored, out_dir, args.label)
+    compare_records = None
+    compare_label = getattr(args, "compare_label", None)
+    if compare_label:
+        compare_path = RESULTS_DIR / compare_label / "scored.jsonl"
+        if not compare_path.exists():
+            print(f"[chemeval] {compare_path} がありません"
+                  f"（--compare-label の側を先に採点してください）")
+            return 1
+        compare_records = runner.read_records(compare_path)
+        print(f"[chemeval] 比較列: {compare_label}（{len(compare_records)} 件）")
+    summary = report.write_report(scored, out_dir, args.label,
+                                  compare_records=compare_records,
+                                  compare_label=compare_label)
     _print_summary(summary)
     print(f"\n[chemeval] report: {out_dir / 'report.md'}")
     print(f"[chemeval] metrics: {out_dir / 'metrics.json'}")

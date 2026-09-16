@@ -143,6 +143,9 @@ async def run_items(config, items: list[ChemEvalItem], runner_config: RunnerConf
                 # query も残しておく（judge の再採点を run なしでできるようにする）
                 "query": item.query, "target": item.target,
                 "answer": None, "answer_source": "none",
+                # SDK が実際に使ったモデル。文献値と並べるときに「どのモデルの成績か」
+                # を言えるようにするため必ず残す（config が `model: default` でも）
+                "model": None,
                 "harness_passed": None, "attempts": 0, "error": None,
             }
             started = time.monotonic()
@@ -156,6 +159,7 @@ async def run_items(config, items: list[ChemEvalItem], runner_config: RunnerConf
                     run_id=run_id,
                 )
                 record.update(
+                    model=getattr(report, "model", None),
                     harness_passed=bool(report.passed),
                     attempts=report.attempts,
                     timeout_extensions=report.timeout_extensions,

@@ -328,11 +328,12 @@ class HarnessController:
                 state.status = "failed"
             tracer.emit("reasoning_summary", actor="controller",
                         payload={"phase": "finished", "status": state.status,
-                                 "attempts": state.attempts})
+                                 "attempts": state.attempts, "model": state.model})
             artifacts = artifacts_mgr.scan()
             ledger.close(state.status)
             built = RunReport(
                 run_id=run_id, task=task, provider=chosen,  # type: ignore[arg-type]
+                model=state.model,
                 passed=bool(verification and verification.passed),
                 attempts=state.attempts,
                 timeout_extensions=state.timeout_extensions,

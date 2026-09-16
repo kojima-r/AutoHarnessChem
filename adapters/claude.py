@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from adapters.base import AdapterUnavailable, BaseAdapter
+from adapters.base import AdapterUnavailable, BaseAdapter, real_model_name
 from harness.traces import clip
 from schemas import RunState, TaskSpec
 
@@ -73,6 +73,11 @@ class ClaudeAgentAdapter(BaseAdapter):
 
     def _normalize(self, message: Any, state: RunState) -> None:
         kind = type(message).__name__
+        # SDK が使ったモデルを記録する（`model: default` だと設定側からは判らないため）。
+        # `<synthetic>` などのプレースホルダでは上書きしない
+        reported = real_model_name(getattr(message, "model", None))
+        if reported:
+            state.model = reported
         if kind == "AssistantMessage":
             for block in getattr(message, "content", []) or []:
                 block_kind = type(block).__name__

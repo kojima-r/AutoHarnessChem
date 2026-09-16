@@ -124,15 +124,19 @@ class Judge:
     async def _ask_claude_sdk(self, prompt: str) -> str:
         from claude_agent_sdk import ClaudeAgentOptions, query
 
-        # max_turns=1 だと、複雑な分子で採点理由が長くなったときに SDK が
-        # `Reached maximum number of turns (1)` をエラーとして返し、採点が
-        # 落ちる（フル評価で実際に 3 件が未採点になった）。ツールは一切
-        # 許可していないので 2 にしても往復が増えるだけで暴走はしない。
+        # max_turns が小さいと、複雑な分子で採点理由が長くなったときに SDK が
+        # `Reached maximum number of turns (N)` をエラーとして返し、採点が落ちる
+        # （2 でも name_generation_from_text の 7 件が残った）。採点は 1 往復の
+        # 問い合わせでツールも要らないので、往復の余裕だけ持たせる。
+        # `allowed_tools=[]` は許可リスト未指定の意味でツールを無効にしないため、
+        # ツールセット自体を空にする（実測では判定にツールを使っていないが、
+        # 「採点者がコードを実行する」余地を残さないために明示する）。
         options = ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
             model=self.model,
+            tools=[],
             allowed_tools=[],
-            max_turns=2,
+            max_turns=6,
         )
         text = ""
         try:
