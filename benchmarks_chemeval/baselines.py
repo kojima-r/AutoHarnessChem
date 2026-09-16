@@ -123,25 +123,39 @@ def system_macro(rows: dict[str, dict], baselines: dict | None = None) -> dict:
 
 
 def compare_column(rows: dict[str, dict], macro: dict, other_tasks: dict[str, dict],
-                   label: str) -> dict:
+                   label: str, all_task_ids: list[str] | None = None) -> dict:
     """別 run（例: 素の LLM ベースライン）を比較列として並べるための値。
 
-    ahc 側と**同じ `ours_field`** で値を取り、マクロ平均は文献値と同じタスク集合で
-    出す（そのうち相手側にも値がある分だけ。n を併記して母集団の違いを判るようにする）。
+    ahc 側と**同じ `ours_field`** で値を取る。文献値と違い、こちらは自分で同じ採点を
+    通した結果なので**文献値が無いタスクでも比較できる**（`all_task_ids` を渡すと
+    全タスクぶん値を返す）。マクロ平均だけは文献値と同じ 31 タスクの母集団で出し、
+    そのうち相手側にも値がある分だけを使う（n を併記して母集団の違いが判るように）。
     """
     subset = list(macro.get("task_ids") or [])
+    targets = list(all_task_ids) if all_task_ids is not None else subset
     values: dict[str, float | None] = {}
-    for task_id in subset:
-        row, summary = rows.get(task_id) or {}, other_tasks.get(task_id)
-        values[task_id] = (_ours(summary, row.get("ours_field") or "score")
-                           if summary is not None else None)
-    usable = [v for v in values.values() if v is not None]
-    return {"label": label, "tasks": values, "n_tasks": len(usable),
-            "macro": round(sum(usable) / len(usable), 4) if usable else None,
+    fields: dict[str, str] = {}
+    for task_id in targets:
+        row = rows.get(task_id) or {}
+        # 文献値と突き合わせるタスクは論文の主指標に合わせる。それ以外は score
+        field = (row.get("ours_field") or "score") if row.get("comparable") else "score"
+        fields[task_id] = field
+        summary = other_tasks.get(task_id)
+        values[task_id] = _ours(summary, field) if summary is not None else None
+    usable = [t for t in subset if values.get(t) is not None]
+    return {"label": label, "tasks": values, "fields": fields, "n_tasks": len(usable),
+            "macro": round(sum(values[t] for t in usable) / len(usable), 4)
+            if usable else None,
             # 同じ母集団で比べた ahc 側の平均（相手に欠測があると全体平均とずれるため）
             "ours_macro_same_subset": round(
-                sum(rows[t]["ours"] for t in subset if values[t] is not None)
-                / len(usable), 4) if usable else None}
+                sum(rows[t]["ours"] for t in usable) / len(usable), 4) if usable else None}
+
+
+def task_macro(rows: dict[str, dict], task_ids: list[str], key: str) -> float | None:
+    """指定したタスク群の平均（文献最高 / ahc / 素の LLM をレベル単位で見るため）。"""
+    values = [rows[t][key] for t in task_ids
+              if t in rows and rows[t].get("comparable") and rows[t].get(key) is not None]
+    return round(sum(values) / len(values), 4) if values else None
 
 
 def compare(tasks: dict[str, dict], baselines: dict | None = None,
@@ -155,9 +169,11 @@ def compare(tasks: dict[str, dict], baselines: dict | None = None,
     macro = system_macro(rows, baselines)
     out = {"source": baselines.get("source", {}),
            "systems": baselines.get("systems", []),
+           "system_kinds": baselines.get("system_kinds", {}),
            "tasks": rows,
            "aggregates": aggregate_rows(tasks, baselines),
            "macro": macro}
     if other_tasks is not None and other_label:
-        out["compare"] = compare_column(rows, macro, other_tasks, other_label)
+        out["compare"] = compare_column(rows, macro, other_tasks, other_label,
+                                        all_task_ids=list(tasks))
     return out

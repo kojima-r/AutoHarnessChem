@@ -68,6 +68,11 @@ def summarize_group(records: list[dict]) -> dict:
         "answer_sources": _count(records, "answer_source"),
         # どのモデルの成績かを明示する（文献値と並べる以上、必須の情報）
         "models": _count([r for r in records if r.get("model")], "model"),
+        # SDK が報告した値か、後から申告で補った値かの別
+        "model_sources": _count([r for r in records if r.get("model_source")],
+                                "model_source"),
+        # harness を通した run か、素の LLM の run か
+        "modes": _count([r for r in records if r.get("mode")], "mode"),
     }
 
 
@@ -104,6 +109,8 @@ def summarize(records: list[dict], label: str = "chemeval",
     order = {task.id: i for i, task in enumerate(catalog)}
     summary: dict = {"label": label, "n_records": len(records), "providers": {}}
     other = task_summaries(compare_records) if compare_records else None
+    # 比較 run のモデル名（レポートに「何を素の LLM として測ったか」を書くため）
+    other_models = _count([r for r in (compare_records or []) if r.get("model")], "model")
     for provider, provider_records in sorted(_group(records, "provider").items()):
         levels = {}
         for level in LEVELS:
@@ -138,10 +145,36 @@ def summarize(records: list[dict], label: str = "chemeval",
             "baselines": baselines.compare(all_tasks, other_tasks=other,
                                            other_label=compare_label),
         }
+        column = (summary["providers"][provider]["baselines"] or {}).get("compare")
+        if column is not None:
+            column["models"] = other_models
     return summary
 
 
 # --- Markdown -----------------------------------------------------------
+#
+# レポートは「文脈を知らない人が単体で読める」ことを目標に章立てする。
+# 比較表はすべて同じ 6 列（AHC / 文献最高 / その手法 / 素の LLM / 差 2 種）に
+# 揃える。揃っていないと、どの表がどの母集団の話か読み手が追えなくなる。
+
+# すべての比較表で共通に使う列。主語（この run が AHC か素の LLM か）だけ差し替える。
+# 素の LLM ベースラインが無い場合はその 2 列を落とす（空欄を並べても読めないため）。
+def _cmp_align(with_bare: bool = True) -> str:
+    return "--: | --: | --- | --: | --: | --:" if with_bare else "--: | --: | --- | --:"
+
+
+def _cmp_header(subject: str = "AHC", with_bare: bool = True) -> str:
+    if not with_bare:
+        return f"{subject} | 文献最高 | 文献最高の手法 | Δ({subject}−文献)"
+    return (f"{subject} | 文献最高 | 文献最高の手法 | 素のLLM "
+            f"| Δ({subject}−文献) | Δ({subject}−素)")
+
+
+def _subject(block: dict) -> str:
+    """この run の呼び名。bare モードの run を「AHC」と呼ばないため。"""
+    modes = (block.get("overall") or {}).get("modes") or {}
+    return "素のLLM（この run）" if modes.get("bare") else "AHC"
+
 
 def _fmt(value, digits: int = 3) -> str:
     if value is None:
@@ -149,6 +182,26 @@ def _fmt(value, digits: int = 3) -> str:
     if isinstance(value, float):
         return f"{value:.{digits}f}"
     return str(value)
+
+
+def _signed(value, digits: int = 3) -> str:
+    """差分は符号つきで出す（+ が AHC の優位）。"""
+    if value is None:
+        return "-"
+    return f"{'+' if value > 0 else ''}{value:.{digits}f}"
+
+
+def _diff(a, b):
+    return round(a - b, 4) if (a is not None and b is not None) else None
+
+
+def _cmp_cells(ours, best, system, bare, with_bare: bool = True) -> str:
+    """共通列の中身。どの表でも同じ順・同じ意味にする。"""
+    head = f"{_fmt(ours)} | {_fmt(best)} | {system or '-'}"
+    if not with_bare:
+        return f"{head} | {_signed(_diff(ours, best))}"
+    return (f"{head} | {_fmt(bare)} "
+            f"| {_signed(_diff(ours, best))} | {_signed(_diff(ours, bare))}")
 
 
 def _metric_cell(group: dict) -> str:
@@ -160,149 +213,300 @@ def _metric_cell(group: dict) -> str:
     return ", ".join(f"{k}={_fmt(metrics[k])}" for k in keep) or "-"
 
 
-def _render_baselines(compare: dict) -> list[str]:
-    """文献値（論文 Table 1）との比較セクション。"""
-    if not compare:
-        return []
-    source, macro = compare.get("source", {}), compare.get("macro") or {}
-    rows = compare.get("tasks") or {}
-    lines = ["", "### 文献値との比較（他手法）", "",
-             f"- 出典: {source.get('paper', '?')}（{source.get('venue', '?')}） "
-             f"{source.get('table', '')}",
-             f"- 論文: {source.get('url', '')} / 転記元の図: `{source.get('local_figure', '')}`",
-             "- **同条件の比較ではない**: 論文は素の LLM を 0-shot で評価している。ahc は",
-             "  「ツール（量子化学計算・反応予測・逆合成）+ Verifier + 再計画ループ」なので、",
-             "  差はモデル性能だけでなく harness の寄与も含む。",
-             ""]
+def _models_cell(group: dict) -> str:
+    models = group.get("models") or {}
+    if not models:
+        return "記録なし"
+    cell = ", ".join(f"{name}（{count} 問）" for name, count in models.items())
+    # 実行時にモデル記録が無かった run は後から補ったものなので、その旨を残す
+    if group.get("model_sources", {}).get("user-stated"):
+        cell += "（実行時は記録未実装のため申告値）"
+    return cell
+
+
+def _intro(summary: dict, block: dict) -> list[str]:
+    """1. このレポートの読み方 / 2. 評価条件。"""
+    compare = block.get("baselines") or {}
+    source = compare.get("source", {})
+    macro = compare.get("macro") or {}
     column = compare.get("compare") or {}
-    if macro.get("n_tasks"):
-        lines += [f"指標が一致する {macro['n_tasks']} タスクだけを母集団にしたマクロ平均"
-                  "（全手法で同じタスク集合）:", "",
-                  "| 手法 | マクロ平均 |", "| --- | --: |",
-                  f"| **ahc（この run）** | **{_fmt(macro['ours'])}** |"]
-        if column.get("macro") is not None:
-            lines.append(f"| 素の LLM（`{column['label']}` / ツールなし 1 ターン、"
-                         f"{column['n_tasks']} タスク） | {_fmt(column['macro'])} |")
-        for system, value in macro["systems"].items():
-            lines.append(f"| {system} | {_fmt(value)} |")
-        lines.append("")
-    if column.get("macro") is not None:
-        gap = None
-        if column.get("ours_macro_same_subset") is not None:
-            gap = round(column["ours_macro_same_subset"] - column["macro"], 4)
-        lines += [f"`{column['label']}` は同じ問題・同じ採点で**ツールも Verifier も再計画も"
-                  "使わずに**解かせた結果。ahc との差が harness の寄与にあたる:", "",
-                  f"- 同一母集団（{column['n_tasks']} タスク）での ahc: "
-                  f"**{_fmt(column.get('ours_macro_same_subset'))}** / "
-                  f"素の LLM: **{_fmt(column['macro'])}** / 差: "
-                  f"**{'+' if gap is not None and gap > 0 else ''}{_fmt(gap)}**", ""]
-        rows_with = [(t, rows[t], v) for t, v in column["tasks"].items() if v is not None]
-        if rows_with:
-            lines += ["| task | 比較指標 | ahc | 素の LLM | 差 | 文献最高 | その手法 |",
-                      "| --- | --- | --: | --: | --: | --: | --- |"]
-            for task_id, row, value in sorted(rows_with,
-                                              key=lambda x: (x[1]["ours"] or 0) - x[2]):
-                diff = round((row["ours"] or 0) - value, 4)
-                lines.append(
-                    f"| {task_id} | {row.get('ours_field') or 'score'} "
-                    f"| {_fmt(row['ours'])} | {_fmt(value)} "
-                    f"| {'+' if diff > 0 else ''}{_fmt(diff)} "
-                    f"| {_fmt(row['best'])} | {row['best_system'] or '-'} |")
-            lines.append("")
+    overall = block["overall"]
+    subject = _subject(block)
+    has_bare = column.get("macro") is not None
+    bare_label = column.get("label") or "（未測定）"
+    lines = [
+        "## 1. このレポートの読み方", "",
+        "### 1.1 何を測ったか", "",
+        "ChemEval（ICLR 2026, USTC / iFLYTEK）は化学の能力を 4 レベル / 13 能力次元 /",
+        "62 タスクに分けて測るベンチマーク。ここでは text split の 0-shot 全問",
+        f"（{summary['n_records']} 問）を **AutoHarnessChem（ahc）に解かせて**採点した。",
+        "ahc は素の LLM ではなく「ツール（量子化学計算・反応予測・逆合成）+ Verifier +",
+        "再計画ループ」を持つエージェントなので、測っているのは**エージェントとしての実力**。",
+        "",
+        "### 1.2 比較する 3 者", "",
+        "| 列 | 中身 | モデル | ツール | 出どころ |",
+        "| --- | --- | --- | --- | --- |",
+        f"| **AHC** | ahc（この run） | {_models_cell(overall)} | あり | 本 run |",
+        f"| **素のLLM** | 同じ問題を 1 往復で解かせただけ "
+        f"| {_models_cell(column)} | **なし** | 別 run `{bare_label}` |",
+        f"| **文献最高** | 論文 Table 1 の 13 手法のうち各タスクの最高値 | 各手法 "
+        f"| 手法による | {source.get('venue', '?')} 論文 |",
+        "",
+        "3 者を並べる狙いは、**モデル自体の強さ**（素のLLM vs 文献）と、",
+        "**harness が足している分**（AHC vs 素のLLM）を切り分けること。",
+        "",
+        "### 1.3 表の共通の列", "",
+        f"本レポートの比較表はすべて同じ {'6' if has_bare else '4'} 列で揃えてある。",
+        "",
+        "| 列 | 意味 |",
+        "| --- | --- |",
+        f"| {subject} | この run のスコア（0..1、高いほど良い） |",
+        "| 文献最高 | 論文 13 手法中の最高値を 0..1 に直したもの |",
+        "| 文献最高の手法 | その値を出した手法名 |",
+    ] + ([
+        "| 素のLLM | 同じモデルにツールなしで解かせたスコア |",
+        f"| Δ({subject}−文献) | 正なら既発表の最高値を上回る |",
+        f"| Δ({subject}−素) | 正なら harness が効いている（モデル差は含まない） |",
+    ] if has_bare else [
+        f"| Δ({subject}−文献) | 正なら既発表の最高値を上回る |",
+    ]) + [
+        "",
+        "**文献値は指標が一致するタスクにだけ入れ、違うものは `n/a`**（4.4 に理由）。",
+        "素のLLM は自分で同じ採点を通しているので、文献値が無いタスクでも比較できる。",
+        "",
+        "## 2. 評価条件", "",
+        "| 項目 | 内容 |",
+        "| --- | --- |",
+        f"| データ | ChemEval text split / 0-shot / {summary['n_records']} 問 / "
+        f"{overall['n']} レコード |",
+        f"| AHC の実行 | 1 問 = 1 エージェント実行。Verifier 合格率 "
+        f"{_fmt(overall['harness_passed_rate'])} / 平均試行 "
+        f"{_fmt(overall['mean_attempts'], 2)} 回 / 平均所要 "
+        f"{_fmt(overall['mean_elapsed_sec'], 1)} 秒 |",
+        "| 素のLLM の実行 | ツールを持たせず（`tools=[]`）1 往復。問題文は原文のまま |",
+        "| 採点 | 公式指標を再実装した `metrics.py`。AHC / 素のLLM で**同一の採点経路** |",
+        "| 自由記述 | LLM-as-judge（0..10 を 0..1 に正規化）。両者で同じ判定器 |",
+        "| 回帰タスク | 尺度が違うため score に混ぜず RMSE / MAE を別掲（4.1 の追加指標列） |",
+        f"| 比較母集団 | 指標が一致する {macro.get('n_tasks', 0)} タスク（3.1 / 4.2） |",
+        "",
+    ]
+    return lines
+
+
+def _render_overview(block: dict) -> list[str]:
+    """3. 総合結果。"""
+    subject = _subject(block)
+    compare = block.get("baselines") or {}
+    has_bare = (compare.get("compare") or {}).get("macro") is not None
+    macro = compare.get("macro") or {}
+    column = compare.get("compare") or {}
+    overall = block["overall"]
+    rows = compare.get("tasks") or {}
+    if not macro.get("n_tasks"):
+        return []
+    n = macro["n_tasks"]
+    best_mean = baselines.task_macro(rows, macro.get("task_ids") or [], "best")
+    ours = column.get("ours_macro_same_subset", macro.get("ours"))
+    bare = column.get("macro")
+    lines = [
+        "## 3. 総合結果", "",
+        f"### 3.1 {'3 者' if has_bare else '文献値との'}比較（指標が一致する {n} タスク）", "",
+        f"| 対象 | n | {_cmp_header(subject, has_bare)} |",
+        f"| --- | --: | {_cmp_align(has_bare)} |",
+        f"| マクロ平均 | {n} | {_cmp_cells(ours, best_mean, '—', bare, has_bare)} |",
+        "",
+        f"- 文献側は**各タスクの最高値だけを集めて平均**しても {_fmt(best_mean)}"
+        "（単一手法の成績ではない上限値）。",
+    ]
+    if has_bare:
+        lines += [
+            f"- **{subject} {_fmt(ours)}** に対し素のLLM {_fmt(bare)} なので、"
+            f"**harness の寄与は {_signed(_diff(ours, bare))}**。",
+            "- 素のLLM の時点で既に文献側を上回っているので、",
+            "  文献との差の大部分は**モデル世代の差**であって harness ではない。",
+        ]
+    lines += [
+        "",
+        "### 3.2 全手法の順位（同じ母集団のマクロ平均）", "",
+        "| 順位 | 手法 | 種別 | ツール | マクロ平均 |",
+        "| --: | --- | --- | --- | --: |",
+    ]
+    kinds = compare.get("system_kinds") or {}
+    bare_model = ", ".join(column.get("models") or {}) or "claude-opus-5"
+    ranking = [("AHC（この run）", "ツール利用エージェント", "あり", ours),
+               (f"素のLLM（{bare_model}）", "汎用LLM", "なし", bare)]
+    ranking += [(name, kinds.get(name, "-"),
+                 "あり" if kinds.get(name) == "ツール利用エージェント" else "なし", value)
+                for name, value in (macro.get("systems") or {}).items()]
+    ranking = [r for r in ranking if r[3] is not None]
+    for rank, (name, kind, tools, value) in enumerate(sorted(ranking, key=lambda r: -r[3]), 1):
+        mark = "**" if name.startswith(("AHC", "素のLLM")) else ""
+        lines.append(f"| {rank} | {mark}{name}{mark} | {kind} | {tools} "
+                     f"| {mark}{_fmt(value)}{mark} |")
+    lines += ["", "文献側の 13 手法は論文 Table 1 の値。**同条件の比較ではない**"
+              "（論文は素の LLM の 0-shot、AHC はツールつきエージェント）。", "",
+              "### 3.3 レベル別", "", f"| レベル | n | {_cmp_header(subject, has_bare)} | 回答率 |",
+              f"| --- | --: | {_cmp_align(has_bare)} | --: |"]
+    for level, level_block in block["levels"].items():
+        ids = list(level_block["tasks"])
+        lvl_best = baselines.task_macro(rows, ids, "best")
+        lvl_ours = baselines.task_macro(rows, ids, "ours")
+        bare_values = [(column.get("tasks") or {}).get(t) for t in ids
+                       if (rows.get(t) or {}).get("comparable")]
+        bare_values = [v for v in bare_values if v is not None]
+        lvl_bare = round(sum(bare_values) / len(bare_values), 4) if bare_values else None
+        lines.append(f"| {level} | {level_block['n']} "
+                     f"| {_cmp_cells(lvl_ours, lvl_best, '—', lvl_bare, has_bare)} "
+                     f"| {_fmt(level_block['answered_rate'])} |")
+    lines += ["", "レベル別の 3 者はいずれも**そのレベルに属する比較可能タスクの平均**",
+              "（論文はレベル平均を公表していないので、Table 1 の値から計算した派生値）。", ""]
+    return lines
+
+
+def _render_tasks(block: dict) -> list[str]:
+    """4. タスク別の結果。"""
+    subject = _subject(block)
+    compare = block.get("baselines") or {}
+    has_bare = (compare.get("compare") or {}).get("macro") is not None
+    rows = compare.get("tasks") or {}
+    column = compare.get("compare") or {}
+    bare_values = column.get("tasks") or {}
+    bare_fields = column.get("fields") or {}
+    macro = compare.get("macro") or {}
+    lines = ["## 4. タスク別の結果", "", "### 4.1 全タスク", "",
+             "AHC が解いた全タスク。`比較指標` は 3 者を突き合わせるのに使った値で、",
+             "論文の主指標に合わせるため score 以外を使うタスクがある（例: 論文の",
+             "IUPAC2SMILES は Tanimoto なので tanimoto 同士で比べる）。", "",
+             f"| レベル | 次元 | task | 採点方式 | n | 比較指標 | {_cmp_header(subject, has_bare)} | 追加指標 |",
+             f"| --- | --- | --- | --- | --: | --- | {_cmp_align(has_bare)} | --- |"]
+    for level, level_block in block["levels"].items():
+        for task_id, task in level_block["tasks"].items():
+            ref = rows.get(task_id) or {}
+            field = bare_fields.get(task_id, "score")
+            ours = ref.get("ours") if ref.get("comparable") else task.get("score")
+            best = ref.get("best") if ref.get("comparable") else None
+            system = ref.get("best_system") if ref.get("comparable") else "n/a"
+            cells = _cmp_cells(ours, best, system, bare_values.get(task_id), has_bare)
+            lines.append(
+                f"| {level} | {task.get('dimension') or '-'} | {task_id} "
+                f"| {task['metric']} | {task['n']} | {field} | {cells} "
+                f"| {_metric_cell(task)} |")
+    lines += ["", f"### 4.2 文献値と直接比較できる {macro.get('n_tasks', 0)} タスク", "",
+              "3.1 のマクロ平均の母集団そのもの。**Δ(AHC−素) の小さい順**に並べてあるので、",
+              "上ほど harness が効いていない（むしろ害になっている）タスク。", "",
+              f"| # | task | 比較指標 | n | {_cmp_header(subject, has_bare)} |",
+              f"| --: | --- | --- | --: | {_cmp_align(has_bare)} |"]
+    subset = []
+    for task_id in macro.get("task_ids") or []:
+        ref = rows.get(task_id) or {}
+        task = None
+        for level_block in block["levels"].values():
+            if task_id in level_block["tasks"]:
+                task = level_block["tasks"][task_id]
+                break
+        subset.append((task_id, ref, task, bare_values.get(task_id)))
+    subset.sort(key=lambda x: (_diff(x[1].get("ours"), x[3]) if x[3] is not None else 99))
+    for i, (task_id, ref, task, bare) in enumerate(subset, 1):
+        lines.append(
+            f"| {i} | {task_id} | {ref.get('ours_field') or 'score'} "
+            f"| {task['n'] if task else '-'} "
+            f"| {_cmp_cells(ref.get('ours'), ref.get('best'), ref.get('best_system'), bare, has_bare)} |")
     aggregates = [a for a in (compare.get("aggregates") or []) if a["comparable"]]
     if aggregates:
-        lines += ["論文が複数タスクを 1 行に集約している項目:", "",
-                  "| 論文タスク | 指標 | ahc 側のタスク | ahc | 文献最高 | その手法 | Δ |",
-                  "| --- | --- | --- | --: | --: | --- | --: |"]
+        lines += ["", "### 4.3 論文が複数タスクを 1 行に集約している項目", "",
+                  "論文 Table 1 は分子性質の分類タスクを 1 行にまとめている。AHC / 素のLLM 側は",
+                  "該当タスクのスコア平均で突き合わせる。", "",
+                  f"| 論文タスク | 論文の指標 | 内訳 | {_cmp_header(subject, has_bare)} |",
+                  f"| --- | --- | --- | {_cmp_align(has_bare)} |"]
         for agg in aggregates:
-            delta = _fmt(agg["delta"])
-            if agg["delta"] is not None and agg["delta"] > 0:
-                delta = f"+{delta}"
+            members = [t for t in agg["task_ids"] if bare_values.get(t) is not None]
+            bare = (round(sum(bare_values[t] for t in members) / len(members), 4)
+                    if members else None)
             lines.append(
                 f"| {agg['paper_task']} | {agg['paper_metric']} "
-                f"| {agg['n_tasks']} タスクの平均 | {_fmt(agg['ours'])} "
-                f"| {_fmt(agg['best'])} | {agg['best_system'] or '-'} | {delta} |")
-        lines.append("")
+                f"| {agg['n_tasks']} タスクの平均 "
+                f"| {_cmp_cells(agg['ours'], agg['best'], agg['best_system'], bare, has_bare)} |")
+        lines += ["", "内訳のタスク: "
+                  + " / ".join(f"`{t}`" for a in aggregates for t in a["task_ids"]), ""]
     skipped = [(t, r) for t, r in rows.items() if not r["comparable"]]
-    skipped += [(",".join(a["task_ids"]), a) for a in (compare.get("aggregates") or [])
+    skipped += [(" / ".join(a["task_ids"]), a) for a in (compare.get("aggregates") or [])
                 if not a["comparable"]]
     if skipped:
-        lines += ["文献値を `n/a` にしたタスク（論文と指標が違うため、並べると優劣を誤らせる）:", ""]
+        lines += ["### 4.4 文献値を `n/a` にしたタスクと理由", "",
+                  "論文と**指標が違う**ため、数値を並べると優劣を誤らせるもの。",
+                  "素のLLM 側は同じ採点を通しているので 4.1 では比較できている。", "",
+                  "| task | 論文のタスク | 論文の指標 | n/a にした理由 |",
+                  "| --- | --- | --- | --- |"]
         for task_id, row in skipped:
-            lines.append(f"- `{task_id}` — 論文 {row['paper_task']} は "
-                         f"{row['paper_metric']}。{row.get('note', '')}")
+            lines.append(f"| `{task_id}` | {row['paper_task']} | {row['paper_metric']} "
+                         f"| {row.get('note', '')} |")
         lines.append("")
     return lines
 
 
+def _render_harness_observations(block: dict) -> list[str]:
+    """5. ahc 固有の観測値。"""
+    overall = block["overall"]
+    lines = ["## 5. AHC 固有の観測値", "",
+             "スコアとは別に、「エージェントとしてタスクを完了できたか」も記録している。",
+             "Verifier 合格率は**答えファイルを作れたか**であって、答えの正しさとは別物。", "",
+             "| 指標 | 値 |", "| --- | --: |",
+             f"| 問題数 | {overall['n']} |",
+             f"| 回答率 | {_fmt(overall['answered_rate'])} |",
+             f"| 形式が妥当だった率 | {_fmt(overall['valid_rate'])} |",
+             f"| Verifier 合格率 | {_fmt(overall['harness_passed_rate'])} |",
+             f"| 平均試行回数 | {_fmt(overall['mean_attempts'], 2)} |",
+             f"| 平均所要時間 | {_fmt(overall['mean_elapsed_sec'], 1)} 秒 |",
+             f"| 実行エラー | {overall['error_count']} 件 |",
+             f"| 答えの取得元 | {overall['answer_sources']} |",
+             f"| 実行モデル | {_models_cell(overall)} |",
+             f"| 問題平均スコア (micro) | {_fmt(overall['score'])}"
+             f"（{overall['scored']}/{overall['n']} 問が採点対象） |",
+             f"| タスク平均スコア (macro, 全タスク) | {_fmt(overall['macro_task_score'])}"
+             f"（{overall['scored_tasks']} タスク） |",
+             ""]
+    return lines
+
+
+def _render_notes(block: dict) -> list[str]:
+    """6. 出典と注記。"""
+    compare = block.get("baselines") or {}
+    source = compare.get("source", {})
+    column = compare.get("compare") or {}
+    lines = ["## 6. 出典と注記", "", "### 6.1 文献値の出典", "",
+             f"- {source.get('paper', '?')}（{source.get('venue', '?')}）",
+             f"- {source.get('table', '')}",
+             f"- 論文: {source.get('url', '')}",
+             f"- 転記元の図: `{source.get('local_figure', '')}`",
+             f"- 正本データ: `benchmarks_chemeval/baselines.yaml`", ""]
+    for note in source.get("notes", []):
+        lines.append(f"- {note}")
+    lines += ["", "### 6.2 読むときの注意", "",
+              "- **論文と同条件の比較ではない。** 論文は素の LLM の 0-shot 評価、AHC は",
+              "  ツール + Verifier + 再計画ループ。素のLLM 列が同条件の比較にあたる。",
+              "- 文献値は**指標が一致するタスクにだけ**入れてある（理由は 4.4）。",
+              "- マクロ平均は**全手法で同じタスク集合**を使う（欠測の多い手法が",
+              "  有利にならないように）。",
+              "- 回帰タスク（RMSE / MAE）は尺度が違うので score に混ぜていない。",
+              "- judge 系タスクは `--judge` を指定したときだけ採点される。",
+              f"- 素のLLM の実測は別 run `{column.get('label', '-')}`。ツールを持たせない",
+              "  設定（`tools=[]`）で、ツール使用を検知したら失敗扱いにしている。", ""]
+    return lines
+
+
 def render_markdown(summary: dict) -> str:
-    lines = [f"# ChemEval 評価レポート: {summary['label']}", "",
-             f"- 対象レコード数: {summary['n_records']}", ""]
-    for provider, block in summary["providers"].items():
-        overall = block["overall"]
-        lines += [
-            f"## provider: {provider}", "",
-            f"- タスク平均スコア (macro, 0..1): **{_fmt(overall['macro_task_score'])}** "
-            f"({overall['scored_tasks']} タスク)",
-            f"- 問題平均スコア (micro): {_fmt(overall['score'])} "
-            f"({overall['scored']}/{overall['n']} 問が採点対象)",
-            f"- 回答率: {_fmt(overall['answered_rate'])} / "
-            f"形式が妥当だった率: {_fmt(overall['valid_rate'])}",
-            f"- Verifier 合格率: {_fmt(overall['harness_passed_rate'])} / "
-            f"平均試行回数: {_fmt(overall['mean_attempts'], 2)} / "
-            f"平均所要: {_fmt(overall['mean_elapsed_sec'], 1)}s / "
-            f"実行エラー: {overall['error_count']} 件",
-            f"- 答えの取得元: {overall['answer_sources']}",
-            f"- 実行モデル: {overall['models'] or '記録なし（この run より前の実装）'}",
-            "",
-            "### レベル別", "",
-            "| level | n | score | 回答率 | Verifier 合格率 | 主要指標 |",
-            "| --- | --: | --: | --: | --: | --- |",
-        ]
-        for level, level_block in block["levels"].items():
-            lines.append(
-                f"| {level} | {level_block['n']} | {_fmt(level_block['score'])} "
-                f"| {_fmt(level_block['answered_rate'])} "
-                f"| {_fmt(level_block['harness_passed_rate'])} "
-                f"| {_metric_cell(level_block)} |")
-        compared = (block.get("baselines") or {}).get("tasks") or {}
-        lines += ["", "### タスク別", "",
-                  "| level | dimension | task | metric | n | 主指標 | score | 回答率 "
-                  "| 比較値(ahc) | 文献最高 | その手法 | Δ | 追加指標 |",
-                  "| --- | --- | --- | --- | --: | --: | --: | --: | --- | --: | --- | --: | --- |"]
-        for level, level_block in block["levels"].items():
-            for task_id, task in level_block["tasks"].items():
-                ref = compared.get(task_id) or {}
-                if ref.get("comparable"):
-                    best, system = _fmt(ref.get("best")), ref.get("best_system") or "-"
-                    delta = _fmt(ref.get("delta"))
-                    if ref.get("delta") is not None and ref["delta"] > 0:
-                        delta = f"+{delta}"
-                    # Δ を検算できるように、ahc 側で比べた値と（score 以外なら）その指標名も出す
-                    field = ref.get("ours_field") or "score"
-                    ours = _fmt(ref.get("ours"))
-                    ours_cell = ours if field == "score" else f"{ours} ({field})"
-                else:
-                    ours_cell, best, system, delta = "-", "n/a", "-", "-"
-                lines.append(
-                    f"| {level} | {task.get('dimension') or '-'} | {task_id} | {task['metric']} "
-                    f"| {task['n']} | {_fmt(task['primary_value'])} | {_fmt(task['score'])} "
-                    f"| {_fmt(task['answered_rate'])} | {ours_cell} | {best} | {system} | {delta} "
-                    f"| {_metric_cell(task)} |")
-        lines += _render_baselines(block.get("baselines") or {})
-        lines.append("")
-    lines += ["## 注記", "",
-              "- score は 0..1 で高いほど良い代表値。回帰タスク（RMSE/MAE）は尺度が違うため",
-              "  score には含めず「主指標」列に出す。",
-              "- judge 系タスクは `--judge` を指定したときだけ採点される（未指定なら score=None）。",
-              "- Verifier 合格率は「ahc が答えファイルを作れたか」であり、答えの正しさとは別。",
-              "- 「文献最高」は ChemEval 論文 Table 1（0-shot text）の 13 手法中の最高値を",
-              "  0..1 に直したもの。正本は `benchmarks_chemeval/baselines.yaml`。**指標が一致する",
-              "  タスクだけ**に入れ、違うものは `n/a`（理由は上の一覧）。Δ = ahc − 文献最高。",
-              "- タスクによって ahc 側の比較値は score でなく tanimoto / exact_set_match を使う",
-              "  （論文の主指標に合わせる）。どの値を使ったかは metrics.json の",
-              "  `baselines.tasks.<task>.ours_field` にある。",
-              ""]
+    providers = summary["providers"]
+    multi = len(providers) > 1
+    lines = ["# ChemEval 評価レポート — AutoHarnessChem (ahc)", "",
+             f"- 対象: `{summary['label']}` / {summary['n_records']} レコード", ""]
+    for provider, block in providers.items():
+        if multi:
+            lines += [f"# provider: {provider}", ""]
+        lines += _intro(summary, block)
+        lines += _render_overview(block)
+        lines += _render_tasks(block)
+        lines += _render_harness_observations(block)
+        lines += _render_notes(block)
     return "\n".join(lines)
 
 

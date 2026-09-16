@@ -903,3 +903,17 @@ extra_rows:
     ChemSpark: 66.26
     Chemcrow: 0.0
   note: ahc の bleu4 / 参考値
+system_kinds:
+  OpenAI-o1: 汎用LLM（推論）
+  GPT-4o: 汎用LLM
+  Claude3.7T: 汎用LLM（推論）
+  Deepseek-R1: 汎用LLM（推論）
+  Deepseek-V3: 汎用LLM
+  Qwen2.5-72B: 汎用LLM
+  Llama3.3-8B: 汎用LLM
+  Gemini-2.5-Pro: 汎用LLM（推論）
+  ChemDFM: 化学特化LLM
+  ChemLLM: 化学特化LLM
+  LlaSMol: 化学特化LLM
+  ChemSpark: 化学特化LLM
+  Chemcrow: ツール利用エージェント
