@@ -5,6 +5,7 @@
   ahc skills list | compile [--provider all] | lock
   ahc benchmark [--provider deepagents --provider claude] [--tag smoke]
   ahc chemeval run [--label smoke] [--limit-per-task 2] (= python -m benchmarks_chemeval.evaluate)
+  ahc chembench run [--label smoke] [--limit-per-topic 2] [--bare] (= python -m benchmarks_chembench.evaluate)
   ahc verify --workspace workspaces/run-xxxx --task-type orbital_calculation
   ahc evolve analyze | propose | evaluate --proposal <id> | promote --proposal <id>
   ahc demo [--env all|pyscf|reactiont5|aizynth] [--out DIR]
@@ -72,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     p_chemeval.add_argument("chemeval_args", nargs=argparse.REMAINDER,
                             help="benchmarks_chemeval.evaluate へ渡す引数")
 
+    # ChemBench（benchmarks_chembench/）での評価。引数はそのまま
+    # `python -m benchmarks_chembench.evaluate` へ渡す
+    p_chembench = sub.add_parser(
+        "chembench",
+        help="ChemBench で評価する（topics | validate | verify-hf | run | score）")
+    p_chembench.add_argument("chembench_args", nargs=argparse.REMAINDER,
+                             help="benchmarks_chembench.evaluate へ渡す引数")
+
     p_verify = sub.add_parser("verify", help="既存 workspace を Verifier で再判定する")
     p_verify.add_argument("--workspace", required=True)
     p_verify.add_argument("--task-type", dest="task_type", default="generic")
@@ -111,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_benchmark(config, args)
     if args.command == "chemeval":
         return _cmd_chemeval(args)
+    if args.command == "chembench":
+        return _cmd_chembench(args)
     if args.command == "verify":
         return _cmd_verify(config, args)
     if args.command == "evolve":
@@ -346,6 +357,22 @@ def _cmd_chemeval(args) -> int:
     if not ({"prepare", "tasks", "run", "score"} & set(forwarded)):
         forwarded.append("tasks")   # サブコマンド未指定ならタスク一覧を出す
     return chemeval_main(forwarded)
+
+
+def _cmd_chembench(args) -> int:
+    """ChemBench 評価 CLI へ委譲する（`ahc --config` はそのまま引き継ぐ）。"""
+    from benchmarks_chembench.evaluate import build_parser, main as chembench_main
+
+    forwarded = list(args.chembench_args or [])
+    if args.config:
+        forwarded = ["--config", args.config, *forwarded]
+    # サブコマンド名は委譲先のパーサから取る（ここに列挙すると追加時に取りこぼす）
+    known = set()
+    for action in build_parser()._subparsers._group_actions:
+        known |= set(action.choices or {})
+    if not (known & set(forwarded)):
+        forwarded.append("topics")  # サブコマンド未指定ならトピック一覧を出す
+    return chembench_main(forwarded)
 
 
 def _cmd_verify(config, args) -> int:

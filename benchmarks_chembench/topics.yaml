@@ -1,0 +1,75 @@
+# ChemBench のトピックカタログ（正本）。
+#
+# ChemBench は「トピック × 1 問」の構造で、ChemEval のような「タスク × 多数の問」ではない。
+# そのため集計の単位はトピック（9 個）で、`ahc` に渡す task_type はトピックごとに決める。
+#
+# トピック名の出どころは公式リポジトリの `scripts/classified_questions_leaderboard.csv`
+# （question_name → topic / requires / difficulty）。論文の Figure と同じ分類で、
+# HuggingFace 版データセットの config 名（snake_case）と 1:1 で対応する。
+#
+# **採点方式と正解は Evolver の変更禁止対象**（`benchmarks/tasks.yaml` と同じ扱い）。
+source:
+  benchmark: 'ChemBench: Are large language models superhuman chemists?'
+  paper: arXiv:2404.01475
+  multimodal_paper: arXiv:2411.16955
+  repository: benchmarks_chembench/chembench
+  dataset: https://huggingface.co/datasets/jablonkagroup/ChemBench
+  topic_table: chembench/scripts/classified_questions_leaderboard.csv
+  license: MIT（データセット。評価専用で学習には使わないこと）
+
+# ahc に渡す task_type の既定値。
+#
+# ChemBench は**知識・推論のベンチマーク**であって計算タスク集ではない。実測で
+#   量子化学（HOMO/LUMO 等）に触れる問題 1 件 / 逆合成 1 件 / 反応生成物 5 件 /
+#   SMILES を含む問題 91 件（うち NMR ピーク数え 56 件）/ 2,788 問
+# しかないため、専用ツールへ振り分ける意味のあるトピックが無い。したがって
+# 全トピックを `generic` にし、ツールは registry 経由で全部使える状態のまま
+# エージェントに選ばせる（`build_default_registry` は task_type で絞らない）。
+# harness の寄与は「重い化学計算」ではなく「Bash での数値計算・rdkit での確認・
+# Verifier による回答形式の担保・再計画」に現れる、という想定で測る。
+default_ahc_task_type: generic
+
+# トピックごとに task_type を変えたくなったらここを書き換える（コード変更は不要）。
+# 空 = すべて default_ahc_task_type を使う。
+task_type_overrides: {}
+
+topics:
+- id: analytical_chemistry
+  name: Analytical Chemistry
+  description: NMR・質量分析・分光法の解釈、ピーク数の予測
+- id: chemical_preference
+  name: Chemical Preference
+  description: 2 つの候補分子のどちらを創薬で選ぶか（化学者の直感との一致を測る）
+- id: general_chemistry
+  name: General Chemistry
+  description: 電子数・周期表・基礎的な化学量論
+- id: inorganic_chemistry
+  name: Inorganic Chemistry
+  description: 錯体・点群・固体化学
+- id: materials_science
+  name: Materials Science
+  description: 高分子・機能性材料・ナノ材料
+- id: organic_chemistry
+  name: Organic Chemistry
+  description: 反応性・官能基・立体化学・反応機構
+- id: physical_chemistry
+  name: Physical Chemistry
+  description: 熱力学・動力学・電気化学・分光学の計算
+- id: technical_chemistry
+  name: Technical Chemistry
+  description: 反応工学・プロセス化学
+- id: toxicity_and_safety
+  name: Toxicity and Safety
+  description: 毒性・GHS 分類・薬物動態・薬品の混触危険性
+
+# 「何を必要とするか」の分類（classified_questions_leaderboard.csv の requires 列）。
+# harness の効き方がここで変わるはずなので、レポートではこの軸でも集計する。
+requires:
+- Intuition
+- Knowledge
+- Reasoning
+- Calculation
+- Knowledge and Reasoning
+- Calculation and Reasoning
+- Calculation and Knowledge
+- Calculation, Knowledge and Reasoning

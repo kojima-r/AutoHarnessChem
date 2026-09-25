@@ -36,3 +36,13 @@ benchmarks_chemeval/data/
 benchmarks_chemeval/results/
 # ChemEval 公式リポジトリのクローン（独自 .git を持つ入れ子。親にはコミットしない）
 benchmarks_chemeval/ChemEval/
+
+# ChemBench: ダウンロードしたデータセットと評価結果（再生成できる）
+benchmarks_chembench/data/
+benchmarks_chembench/results/
+# ChemBench 公式リポジトリのクローン（独自 .git を持つ入れ子。親にはコミットしない）
+benchmarks_chembench/chembench/
+# まれにエージェントが答えファイルを workspace ではなくプロセスの cwd（= リポジトリ
+# 直下）に書く。採点には影響しない（抽出は workspace 以下しか見ない）が、全件 run は
+# 数日かかるので git status を汚さないよう無視する。詳細は benchmarks_chembench/README.md
+/chembench_answer.json

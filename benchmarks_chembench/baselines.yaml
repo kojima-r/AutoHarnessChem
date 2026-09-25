@@ -1,0 +1,77 @@
+# ChemBench の文献値（公開 report）のメタ情報。
+#
+# **値そのものは持たない。** 数値は公式リポジトリ同梱の
+# `chembench/reports/<model>/<model>.json`（問題ごとの `all_correct`）から
+# 実行時に読む。ChemEval のように論文の表を転記する必要がないので、
+# ahc が解いた問題だけに母集団を絞った同一問題での比較ができる。
+#
+# ここに書くのは「その report が何なのか」（表示名・種別・ツールの有無）だけ。
+# 採点には一切関与しない出典メタデータで、Evolver の変更禁止対象。
+source:
+  paper: 'Are large language models superhuman chemists?'
+  arxiv: arXiv:2404.01475
+  multimodal_paper: arXiv:2411.16955
+  leaderboard: https://huggingface.co/spaces/jablonkagroup/ChemBench-Leaderboard
+  reports_dir: benchmarks_chembench/chembench/reports
+  notes:
+  - 各 report の per-question `all_correct` は「選択肢の完全一致（hamming=0）」または「数値が正解の 1% 以内」。ahc 側も metrics.py で同じ規則で採点する。
+  - 文献の各モデルは 1 往復・ツールなしが基本。`kind: agent` のものだけツールや検索を使っている（ahc と比べる相手はこれ）。
+  - humans は 20 名の参加者 × {ツール有り, ツール無し} の平均で、人間用に選ばれた部分集合（約 120 問）しか解いていない。
+  - '`*-T-one` は temperature=1 で解かせた変種、`log_prob*` は対数確率から答えを選ばせた別条件。同じモデルの別設定なので順位表では参考値。'
+
+# 種別の表示名（レポートの「種別」列）
+kinds:
+  llm: 汎用LLM
+  llm-t1: 汎用LLM（temperature=1）
+  llm-logprob: 汎用LLM（対数確率で選択）
+  agent: ツール利用エージェント
+  human: 人間
+  random: ランダム
+
+# 出題元・実験用で「モデルの成績」ではないもの（順位表から外す）
+exclude:
+- confidence_estimates
+- confidence_estimat_local
+
+# 表示名と種別の上書き（書かれていないモデルは id をそのまま表示名にし、
+# 名前の規則から種別を推定する: -react → agent / -T-one → llm-t1 / log_prob → llm-logprob）
+models:
+  claude2: {name: Claude 2, kind: llm}
+  claude3: {name: Claude 3 Opus, kind: llm}
+  claude3.5: {name: Claude 3.5 Sonnet, kind: llm}
+  claude3.5_haiku: {name: Claude 3.5 Haiku, kind: llm}
+  claude3.5-react: {name: Claude 3.5 Sonnet (ReAct + ツール), kind: agent,
+                    note: ツールを使うエージェント構成。ahc と比べる相手}
+  command-r+: {name: Command R+, kind: llm}
+  deepseek-r1-distill-qwen-1.5b: {name: DeepSeek-R1-Distill-Qwen-1.5B, kind: llm}
+  galactica_120b: {name: Galactica 120B, kind: llm}
+  gemini-pro: {name: Gemini Pro, kind: llm}
+  gemma-1-1-7b-it: {name: Gemma 1.1 7B it, kind: llm}
+  gemma-2-9b-it: {name: Gemma 2 9B it, kind: llm}
+  gpt-3.5-turbo: {name: GPT-3.5 Turbo, kind: llm}
+  gpt-4: {name: GPT-4, kind: llm}
+  gpt-4o: {name: GPT-4o, kind: llm}
+  gpt-4o-react: {name: GPT-4o (ReAct + ツール), kind: agent,
+                 note: ツールを使うエージェント構成。ahc と比べる相手}
+  llama2-13b-chat: {name: Llama 2 13B chat, kind: llm}
+  llama2-70b-chat: {name: Llama 2 70B chat, kind: llm}
+  llama3-8b-instruct: {name: Llama 3 8B instruct, kind: llm}
+  llama3-70b-instruct: {name: Llama 3 70B instruct, kind: llm}
+  llama3.1-8b-instruct: {name: Llama 3.1 8B instruct, kind: llm}
+  llama3.1-70b-instruct: {name: Llama 3.1 70B instruct, kind: llm}
+  llama3.1-405b-instruct: {name: Llama 3.1 405B instruct, kind: llm}
+  mistral-large-2-123b: {name: Mistral Large 2 123B, kind: llm}
+  mixtral-8x7b-instruct: {name: Mixtral 8x7B instruct, kind: llm}
+  o1-preview: {name: o1-preview, kind: llm, note: 推論モデル}
+  paper-qa: {name: PaperQA (文献検索 RAG), kind: agent,
+             note: 論文を検索して答える構成。ahc と比べる相手}
+  phi-3-medium-4k-instruct: {name: Phi-3 medium 4k instruct, kind: llm}
+  qwen-2.5-1.5b: {name: Qwen 2.5 1.5B, kind: llm}
+  qwen-2.5-7b: {name: Qwen 2.5 7B, kind: llm}
+  random_baseline: {name: ランダム選択, kind: random,
+                    note: 選択肢からランダムに選んだ場合の下限}
+
+# 人間の成績（reports/humans/ の参加者ごとの JSON を集約した擬似モデル）
+humans:
+  tool: {name: 人間（ツール使用可）, kind: human}
+  notool: {name: 人間（ツールなし）, kind: human}

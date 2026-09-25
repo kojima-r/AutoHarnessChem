@@ -27,11 +27,13 @@ ahc = "app.cli:main"
 
 [tool.setuptools]
 packages = ["app", "schemas", "harness", "tools", "adapters", "evolver", "benchmarks",
-            "benchmarks_chemeval"]
+            "benchmarks_chemeval", "benchmarks_chembench"]
 
 [tool.setuptools.package-data]
 # ChemEval のタスクカタログ（採点方式と task_type の対応表）
 benchmarks_chemeval = ["tasks.yaml"]
+# ChemBench のトピックカタログと文献値のメタ情報
+benchmarks_chembench = ["topics.yaml", "baselines.yaml"]
 # vendor/ には SmilesDrawer を同梱している（Web UI の配信と HTML レポートへの埋め込みに使う）
 app = ["web/*.html", "web/vendor/*"]
 
